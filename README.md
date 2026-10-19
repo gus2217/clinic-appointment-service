@@ -234,6 +234,19 @@ wall-clock assertions are flaky across runners.
 
 ---
 
+## Quality gates
+
+`make check` runs the three gates locally; CI runs the same three on every pull request:
+
+- **Lint:** `ruff check app tests`
+- **Types:** `mypy app` (strict)
+- **Tests + coverage:** `pytest --cov=app --cov-fail-under=85`
+
+Coverage is measured over `app/`, excluding tests. The gate is intentionally enforced
+in CI so a red pipeline blocks a merge.
+
+---
+
 ## Deployment and CI/CD
 
 - Multi-stage image; the entrypoint runs migrations then serves, so a deploy can never
