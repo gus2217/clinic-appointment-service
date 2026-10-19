@@ -1,7 +1,7 @@
-.PHONY: install migrate seed run test lint typecheck check
+.PHONY: install migrate seed run test lint typecheck check perf
 
 install:
-	python -m pip install -e . --group dev 2>/dev/null || pip install -e .
+	python -m pip install -e .
 
 migrate:
 	alembic upgrade head
@@ -22,3 +22,7 @@ typecheck:
 	mypy app
 
 check: lint typecheck test
+
+perf:
+	python scripts/perf/explain_availability.py
+	python scripts/perf/load_book.py

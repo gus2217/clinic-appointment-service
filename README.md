@@ -217,6 +217,23 @@ For idempotency, send `Idempotency-Key: <any-unique-string>` and `X-Actor-Id: <i
 
 ---
 
+## Performance
+
+Two scripts, both runnable with `make perf`:
+
+- `scripts/perf/explain_availability.py` runs `EXPLAIN (ANALYZE, BUFFERS)` on the
+  availability lookup and fails if the plan uses a sequential scan on `appointment`.
+  The partial indexes `ix_appt_doctor_day` and `ix_appt_patient` exist for exactly this
+  access pattern.
+- `scripts/perf/load_book.py` fires concurrent bookings at one slot and asserts exactly
+  one success, reporting p50 and p95 latency.
+- `scripts/perf/seed_bulk.py` generates doctors and appointments for realistic plans.
+
+CI runs the structural checks (index used, one winner), not latency thresholds, because
+wall-clock assertions are flaky across runners.
+
+---
+
 ## Deployment and CI/CD
 
 - Multi-stage image; the entrypoint runs migrations then serves, so a deploy can never
