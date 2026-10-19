@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 import pytest
 from tests.conftest import future_slot
@@ -86,7 +87,7 @@ async def test_get_and_patient_list(client, seeded):
 async def test_idempotency(client, seeded):
     body = {"doctor_id": str(seeded["doctor"].id), "patient_id": str(seeded["patient"].id),
             "starts_at": future_slot(4, 10).isoformat()}
-    headers = {"Idempotency-Key": "test-key-1", "X-Actor-Id": "patient-1"}
+    headers = {"Idempotency-Key": str(uuid.uuid4()), "X-Actor-Id": "patient-1"}
     r1 = await client.post("/appointments", json=body, headers=headers)
     r2 = await client.post("/appointments", json=body, headers=headers)
     assert r1.status_code == 201

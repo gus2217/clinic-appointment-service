@@ -8,6 +8,8 @@ from app.directories.patients import PatientDirectory
 from app.models.appointment import Appointment
 from app.repositories.appointments import AppointmentRepository, SlotTakenError
 
+HOLD_HOURS = 24
+
 class BookingError(Exception):
     code = "BOOKING_ERROR"
     def __init__(self, message: str):
@@ -51,7 +53,7 @@ class BookingService:
             return value.replace(tzinfo=self.tz)
         return value
 
-    async def _validate(self, doctor, starts_at: datetime, now: datetime) -> tuple[datetime, datetime]:
+    async def _validate(self, doctor, starts_at: datetime, now: datetime):
         local = self._normalise(starts_at).astimezone(self.tz)
         start_utc = local.astimezone(ZoneInfo("UTC"))
         if start_utc <= now:
@@ -71,7 +73,14 @@ class BookingService:
                 raise OutsideWorkingHours("Doctor is unavailable")
         return start_utc, start_utc + timedelta(minutes=settings.slot_minutes)
 
-    async def book(self, doctor_id: uuid.UUID, patient_id: uuid.UUID, starts_at: datetime) -> Appointment:
+    async def book(self, doctor_id: uuid.UUID, patient_id: uuid.UUID, starts_at: datetime,
+                   requires_approval: bool = False) -> Appointment:
+        from sqlalchemy import func, update
+        await self.session.execute(
+            update(Appointment)
+            .where(Appointment.status == "pending", Appointment.hold_expires_at < func.now())
+            .values(status="expired", cancelled_by="system", updated_at=func.now())
+        )
         doctor = await self.doctors.get(doctor_id)
         if doctor is None or not doctor.is_active:
             raise NotFound("Doctor not found")
@@ -81,9 +90,11 @@ class BookingService:
 
         now = datetime.now(ZoneInfo("UTC"))
         start, end = await self._validate(doctor, starts_at, now)
+        status = "pending" if requires_approval else "booked"
         appointment = Appointment(
             doctor_id=doctor.id, patient_id=patient.id, starts_at=start, ends_at=end,
-            duration_minutes=settings.slot_minutes, status="booked",
+            duration_minutes=settings.slot_minutes, status=status,
+            hold_expires_at=(now + timedelta(hours=HOLD_HOURS)) if requires_approval else None,
         )
         try:
             await self.appointments.add(appointment)

@@ -145,6 +145,67 @@ conflicts with current state; 422 means a rule violation; 404 means not found.
 
 ---
 
+## Lifecycle decisions
+
+Statuses: **pending, booked, cancelled, completed, no_show, rejected, expired**.
+
+| From | Action | To | Allowed by |
+|---|---|---|---|
+| — | book | booked | patient |
+| — | book with requires_approval | pending | patient |
+| pending | approve | booked | doctor, admin |
+| pending | reject | rejected | doctor, admin |
+| pending / booked | cancel | cancelled | owner, admin |
+| booked | complete | completed | doctor, admin |
+| booked | no-show | no_show | doctor, admin |
+| pending | hold expires | expired | system |
+
+Decisions, stated plainly:
+
+- **Booking defaults to booked.** `requires_approval: true` creates a pending hold instead.
+- **A pending hold blocks the slot for 24 hours** (`hold_expires_at`). Expired holds are
+  swept on the next booking or availability call and become `expired`.
+- **Auth is off by default** (`CLINIC_AUTH_REQUIRED=false`) so the required endpoints are
+  directly callable. Turning it on enforces the role matrix and returns 401 without
+  `X-Actor-Id` / `X-Actor-Role`.
+- **Every transition writes one `appointment_events` row in the same transaction**, so the
+  audit trail cannot disagree with the appointment state.
+
+---
+
+## Endpoint test guide
+
+Current seed IDs (they change if you reseed; the seed prints the new ones):
+
+- **doctor_id:** `c149a8ba-aa8d-4d27-bdf0-254bf8b2f3c5`
+- **patient_id:** `0296a59f-19e6-47d5-bc50-5e0c08cf9926`
+
+Open `http://127.0.0.1:8000/docs` and use these full URLs. Pick a future weekday for dates.
+
+| # | Endpoint | Full URL | Body | Expected |
+|---|---|---|---|---|
+| 1 | Availability | `GET http://127.0.0.1:8000/doctors/c149a8ba-aa8d-4d27-bdf0-254bf8b2f3c5/availability?date=2026-10-21` | — | 200, list of slots |
+| 2 | Book | `POST http://127.0.0.1:8000/appointments` | `{"doctor_id":"c149a8ba-aa8d-4d27-bdf0-254bf8b2f3c5","patient_id":"0296a59f-19e6-47d5-bc50-5e0c08cf9926","starts_at":"2026-10-21T10:00:00+03:00"}` | 201 |
+| 3 | Duplicate | same as #2 | same | 409 `SLOT_TAKEN` |
+| 4 | Get | `GET http://127.0.0.1:8000/appointments/<appointment_id>` | — | 200 |
+| 5 | Cancel | `PATCH http://127.0.0.1:8000/appointments/<appointment_id>/cancel` | `{"reason":"patient unwell"}` | 200, status cancelled |
+| 6 | Cancel again | same as #5 | same | 409 `APPOINTMENT_ALREADY_CANCELLED` |
+| 7 | Reschedule | `PATCH http://127.0.0.1:8000/appointments/<appointment_id>/reschedule` | `{"starts_at":"2026-10-22T11:00:00+03:00"}` | 200 |
+| 8 | Pending | `POST http://127.0.0.1:8000/appointments` | `{"doctor_id":"…","patient_id":"…","starts_at":"2026-10-23T09:00:00+03:00","requires_approval":true}` | 201, status pending |
+| 9 | Approve | `PATCH http://127.0.0.1:8000/appointments/<id>/approve` | — | 200, status booked |
+| 10 | Reject | `PATCH http://127.0.0.1:8000/appointments/<id>/reject` | `{"reason":"doctor unavailable"}` | 200, status rejected |
+| 11 | Complete | `PATCH http://127.0.0.1:8000/appointments/<id>/complete` | — | 200, status completed |
+| 12 | No-show | `PATCH http://127.0.0.1:8000/appointments/<id>/no-show` | — | 200, status no_show |
+| 13 | Events | `GET http://127.0.0.1:8000/appointments/<id>/events` | — | 200, audit rows |
+| 14 | Patient list | `GET http://127.0.0.1:8000/patients/0296a59f-19e6-47d5-bc50-5e0c08cf9926/appointments?limit=20` | — | 200, upcoming |
+| 15 | Health | `GET http://127.0.0.1:8000/health` | — | 200 |
+| 16 | Ready | `GET http://127.0.0.1:8000/ready` | — | 200 (DB reachable) |
+
+For idempotency, send `Idempotency-Key: <any-unique-string>` and `X-Actor-Id: <id>` on
+`POST /appointments` twice; the second call returns the same appointment id.
+
+---
+
 ## Testing
 
 - API tests: every endpoint and every error code.
