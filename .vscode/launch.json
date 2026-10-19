@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastAPI (uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--port", "8000"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": true
+    },
+    {
+      "name": "pytest",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "pytest",
+      "args": ["-q"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    }
+  ]
+}

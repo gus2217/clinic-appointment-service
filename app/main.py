@@ -1,0 +1,29 @@
+import uuid
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from app.api.errors import booking_error_handler
+from app.api.routes import appointments, availability, health, patients
+from app.services.booking import BookingError
+
+app = FastAPI(title="Clinic Booking API", version="1.0.0")
+app.include_router(health.router)
+app.include_router(appointments.router)
+app.include_router(availability.router)
+app.include_router(patients.router)
+
+@app.middleware("http")
+async def request_id(request: Request, call_next):
+    request.state.request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = request.state.request_id
+    return response
+
+app.add_exception_handler(BookingError, booking_error_handler)
+
+@app.exception_handler(Exception)
+async def unhandled(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"code": "INTERNAL_ERROR", "detail": "Unexpected error",
+                 "request_id": getattr(request.state, "request_id", None)},
+    )
