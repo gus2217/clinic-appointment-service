@@ -1,18 +1,20 @@
-import uuid
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
+from app.models.doctor import Doctor
 from app.repositories.appointments import AppointmentRepository
-from app.services.booking import NotFound
+
 
 class AvailabilityService:
-    def __init__(self, session):
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.tz = ZoneInfo(settings.clinic_timezone)
         self.repo = AppointmentRepository(session)
 
-    async def slots(self, doctor, on_date: date) -> list[tuple[datetime, datetime]]:
+    async def slots(self, doctor: Doctor, on_date: date) -> list[tuple[datetime, datetime]]:
         hours = [h for h in doctor.hours if h.weekday == on_date.weekday()]
         if not hours:
             return []

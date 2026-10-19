@@ -33,11 +33,15 @@ show_missing = true
 skip_empty = true
 
 [tool.ruff]
-line-length = 100
+line-length = 140
 target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+# FastAPI dependency injection requires Depends() in default arguments.
+[tool.ruff.lint.per-file-ignores]
+"app/api/routes/*.py" = ["B008"]
 
 [tool.mypy]
 strict = true

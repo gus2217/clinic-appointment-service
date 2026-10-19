@@ -1,9 +1,12 @@
 import uuid
 from datetime import datetime, time
+
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Time, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.db.base import Base
+
 
 class Doctor(Base):
     __tablename__ = "doctor"

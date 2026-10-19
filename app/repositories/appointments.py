@@ -1,17 +1,20 @@
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Sequence
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.appointment import Appointment
 from app.models.doctor import DoctorTimeOff
+
 
 class SlotTakenError(Exception):
     pass
 
 class AppointmentRepository:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     @staticmethod

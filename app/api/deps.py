@@ -1,8 +1,12 @@
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from fastapi import Depends, Header, HTTPException
+
+from fastapi import Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
 from app.db.session import get_session
+
 
 @dataclass(frozen=True)
 class Principal:
@@ -19,6 +23,6 @@ async def get_principal(
         return Principal(actor_id=x_actor_id, role=x_actor_role)
     return Principal(actor_id=x_actor_id or "anonymous", role=x_actor_role or "admin")
 
-async def get_db() -> AsyncSession:
+async def get_db() -> AsyncIterator[AsyncSession]:
     async for session in get_session():
         yield session

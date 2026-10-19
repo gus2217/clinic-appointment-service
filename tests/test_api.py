@@ -1,6 +1,8 @@
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 import pytest
+
 from tests.conftest import future_slot
 
 pytestmark = pytest.mark.asyncio
@@ -35,7 +37,7 @@ async def test_outside_hours(client, seeded):
 
 async def test_past(client, seeded):
     body = {"doctor_id": str(seeded["doctor"].id), "patient_id": str(seeded["patient"].id),
-            "starts_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()}
+            "starts_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()}
     r = await client.post("/appointments", json=body)
     assert r.status_code == 422
     assert r.json()["code"] == "SLOT_IN_PAST"

@@ -1,9 +1,12 @@
 import uuid
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
+
 from pydantic import BaseModel, Field
+
 from app.models.appointment import Appointment
 from app.models.event import AppointmentEvent
+
 
 class AppointmentCreate(BaseModel):
     doctor_id: uuid.UUID

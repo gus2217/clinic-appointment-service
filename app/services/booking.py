@@ -2,17 +2,21 @@ import uuid
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
 from app.directories.doctors import DoctorDirectory
 from app.directories.patients import PatientDirectory
 from app.models.appointment import Appointment
+from app.models.doctor import Doctor
 from app.repositories.appointments import AppointmentRepository, SlotTakenError
 
 HOLD_HOURS = 24
 
 class BookingError(Exception):
     code = "BOOKING_ERROR"
-    def __init__(self, message: str):
+    def __init__(self, message: str) -> None:
         self.message = message
         super().__init__(message)
 
@@ -41,7 +45,7 @@ class AppointmentNotActive(BookingError):
     code = "APPOINTMENT_NOT_ACTIVE"
 
 class BookingService:
-    def __init__(self, session, clinic_timezone: str | None = None):
+    def __init__(self, session: AsyncSession, clinic_timezone: str | None = None) -> None:
         self.session = session
         self.tz = ZoneInfo(clinic_timezone or settings.clinic_timezone)
         self.doctors = DoctorDirectory(session)
@@ -53,7 +57,9 @@ class BookingService:
             return value.replace(tzinfo=self.tz)
         return value
 
-    async def _validate(self, doctor, starts_at: datetime, now: datetime):
+    async def _validate(
+        self, doctor: Doctor, starts_at: datetime, now: datetime
+    ) -> tuple[datetime, datetime]:
         local = self._normalise(starts_at).astimezone(self.tz)
         start_utc = local.astimezone(ZoneInfo("UTC"))
         if start_utc <= now:
@@ -67,19 +73,24 @@ class BookingService:
         if not any(h.start_time <= local.time() and end_local.time() <= h.end_time for h in hours):
             raise OutsideWorkingHours("Outside working hours")
         day_start = datetime.combine(local.date(), time.min, tzinfo=self.tz)
-        time_off = await self.appointments.time_off_between(doctor.id, day_start, day_start + timedelta(days=1))
+        time_off = await self.appointments.time_off_between(
+            doctor.id, day_start, day_start + timedelta(days=1)
+        )
         for off in time_off:
-            if start_utc < off.ends_at and off.starts_at < start_utc + timedelta(minutes=settings.slot_minutes):
+            if start_utc < off.ends_at and off.starts_at < start_utc + timedelta(
+                minutes=settings.slot_minutes
+            ):
                 raise OutsideWorkingHours("Doctor is unavailable")
         return start_utc, start_utc + timedelta(minutes=settings.slot_minutes)
 
-    async def book(self, doctor_id: uuid.UUID, patient_id: uuid.UUID, starts_at: datetime,
-                   requires_approval: bool = False) -> Appointment:
-        from sqlalchemy import func, update
+    async def book(
+        self, doctor_id: uuid.UUID, patient_id: uuid.UUID, starts_at: datetime,
+        requires_approval: bool = False,
+    ) -> Appointment:
         await self.session.execute(
             update(Appointment)
             .where(Appointment.status == "pending", Appointment.hold_expires_at < func.now())
-            .values(status="expired", cancelled_by="system", updated_at=func.now())
+            .values(status="expired", cancelled_by="system", hold_expires_at=None, updated_at=func.now())
         )
         doctor = await self.doctors.get(doctor_id)
         if doctor is None or not doctor.is_active:

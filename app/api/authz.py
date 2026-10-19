@@ -1,6 +1,8 @@
 from fastapi import HTTPException
+
 from app.api.deps import Principal
 from app.models.appointment import Appointment
+
 
 def _forbidden(detail: str = "Forbidden") -> HTTPException:
     return HTTPException(status_code=403, detail=detail)

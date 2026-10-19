@@ -1,7 +1,9 @@
 import uuid
 from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.api import authz
 from app.api.deps import Principal, get_db, get_principal
 from app.api.schemas import AppointmentListOut, AppointmentOut
@@ -19,7 +21,7 @@ async def upcoming(
     cursor: datetime | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(get_principal),
-):
+) -> AppointmentListOut:
     authz.can_list_patient(principal, str(patient_id))
     if await PatientDirectory(db).get(patient_id) is None:
         raise NotFound("Patient not found")

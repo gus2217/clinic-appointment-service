@@ -1,8 +1,10 @@
 import uuid
 from datetime import date
 from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.api.deps import get_db
 from app.api.schemas import AvailabilityOut, SlotOut
 from app.core.config import settings
@@ -14,10 +16,8 @@ router = APIRouter(prefix="/doctors", tags=["doctors"])
 
 @router.get("/{doctor_id}/availability", response_model=AvailabilityOut)
 async def availability(
-    doctor_id: uuid.UUID,
-    date: date,
-    db: AsyncSession = Depends(get_db),
-):
+    doctor_id: uuid.UUID, date: date, db: AsyncSession = Depends(get_db)
+) -> AvailabilityOut:
     doctor = await DoctorDirectory(db).get(doctor_id)
     if doctor is None or not doctor.is_active:
         raise NotFound("Doctor not found")

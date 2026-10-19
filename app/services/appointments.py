@@ -1,24 +1,27 @@
 import uuid
-from datetime import datetime, timedelta
+from collections.abc import Sequence
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.models.appointment import Appointment
 from app.models.event import AppointmentEvent
 from app.repositories.appointments import AppointmentRepository, SlotTakenError
 from app.repositories.events import EventRepository
 from app.services.booking import (
-    AppointmentAlreadyCancelled, AppointmentNotActive, BookingService, NotFound, SlotTaken,
+    AppointmentAlreadyCancelled,
+    AppointmentNotActive,
+    BookingService,
+    NotFound,
+    SlotTaken,
 )
-
-HOLD_HOURS = 24
 
 ACTIVE = ("pending", "booked")
 
 class AppointmentService:
-    def __init__(self, session):
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.repo = AppointmentRepository(session)
         self.events = EventRepository(session)
@@ -28,11 +31,13 @@ class AppointmentService:
         await self.session.execute(
             update(Appointment)
             .where(Appointment.status == "pending", Appointment.hold_expires_at < func.now())
-            .values(status="expired", cancelled_by="system", updated_at=func.now())
+            .values(status="expired", cancelled_by="system", hold_expires_at=None, updated_at=func.now())
         )
 
-    def _event(self, appointment: Appointment, event_type: str, actor: str,
-               actor_role: str, from_status: str | None, reason: str | None = None) -> None:
+    def _event(
+        self, appointment: Appointment, event_type: str, actor: str,
+        actor_role: str, from_status: str | None, reason: str | None = None,
+    ) -> None:
         self.events.add(AppointmentEvent(
             appointment_id=appointment.id, event_type=event_type,
             actor_id=actor, actor_role=actor_role,
@@ -45,8 +50,10 @@ class AppointmentService:
             raise NotFound("Appointment not found")
         return appointment
 
-    async def _transition(self, appointment_id: uuid.UUID, target: str, event_type: str,
-                          actor: str, actor_role: str, reason: str | None = None) -> Appointment:
+    async def _transition(
+        self, appointment_id: uuid.UUID, target: str, event_type: str,
+        actor: str, actor_role: str, reason: str | None = None,
+    ) -> Appointment:
         appointment = await self.get(appointment_id)
         if appointment.status not in ACTIVE:
             raise AppointmentNotActive("Appointment is not active")
@@ -69,30 +76,45 @@ class AppointmentService:
             raise AppointmentNotActive("Only pending appointments can be approved")
         return await self._transition(appointment_id, "booked", "approved", actor, actor_role)
 
-    async def reject(self, appointment_id: uuid.UUID, reason: str, actor: str, actor_role: str) -> Appointment:
+    async def reject(
+        self, appointment_id: uuid.UUID, reason: str, actor: str, actor_role: str
+    ) -> Appointment:
         appointment = await self.get(appointment_id)
         if appointment.status != "pending":
             raise AppointmentNotActive("Only pending appointments can be rejected")
-        appointment = await self._transition(appointment_id, "rejected", "rejected", actor, actor_role, reason)
-        return appointment
+        return await self._transition(
+            appointment_id, "rejected", "rejected", actor, actor_role, reason
+        )
 
-    async def cancel(self, appointment_id: uuid.UUID, reason: str, actor: str, actor_role: str = "patient") -> Appointment:
+    async def cancel(
+        self, appointment_id: uuid.UUID, reason: str, actor: str, actor_role: str = "patient"
+    ) -> Appointment:
         appointment = await self.get(appointment_id)
         if appointment.status == "cancelled":
             raise AppointmentAlreadyCancelled("Appointment is already cancelled")
-        return await self._transition(appointment_id, "cancelled", "cancelled", actor, actor_role, reason)
+        return await self._transition(
+            appointment_id, "cancelled", "cancelled", actor, actor_role, reason
+        )
 
-    async def complete(self, appointment_id: uuid.UUID, actor: str, actor_role: str) -> Appointment:
+    async def complete(
+        self, appointment_id: uuid.UUID, actor: str, actor_role: str
+    ) -> Appointment:
         appointment = await self.get(appointment_id)
         if appointment.status != "booked":
             raise AppointmentNotActive("Only booked appointments can be completed")
-        return await self._transition(appointment_id, "completed", "completed", actor, actor_role)
+        return await self._transition(
+            appointment_id, "completed", "completed", actor, actor_role
+        )
 
-    async def no_show(self, appointment_id: uuid.UUID, actor: str, actor_role: str) -> Appointment:
+    async def no_show(
+        self, appointment_id: uuid.UUID, actor: str, actor_role: str
+    ) -> Appointment:
         appointment = await self.get(appointment_id)
         if appointment.status != "booked":
             raise AppointmentNotActive("Only booked appointments can be marked no-show")
-        return await self._transition(appointment_id, "no_show", "no_show", actor, actor_role)
+        return await self._transition(
+            appointment_id, "no_show", "no_show", actor, actor_role
+        )
 
     async def reschedule(self, appointment_id: uuid.UUID, starts_at: datetime) -> Appointment:
         appointment = await self.get(appointment_id)
@@ -115,12 +137,13 @@ class AppointmentService:
         await self.session.commit()
         return appointment
 
-    async def upcoming_for_patient(self, patient_id: uuid.UUID, limit: int,
-                                   cursor: datetime | None):
+    async def upcoming_for_patient(
+        self, patient_id: uuid.UUID, limit: int, cursor: datetime | None
+    ) -> Sequence[Appointment]:
         return await self.repo.upcoming_for_patient(
             patient_id, datetime.now(ZoneInfo("UTC")), limit, cursor
         )
 
-    async def events_for(self, appointment_id: uuid.UUID):
+    async def events_for(self, appointment_id: uuid.UUID) -> list[AppointmentEvent]:
         await self.get(appointment_id)
         return await self.events.for_appointment(appointment_id)

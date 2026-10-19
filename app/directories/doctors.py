@@ -1,9 +1,12 @@
 import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.doctor import Doctor
 
+
 class DoctorDirectory:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get(self, doctor_id: uuid.UUID) -> Doctor | None:

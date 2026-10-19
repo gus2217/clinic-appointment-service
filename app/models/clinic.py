@@ -1,8 +1,11 @@
 import uuid
+
 from sqlalchemy import String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.db.base import Base
+
 
 class Clinic(Base):
     __tablename__ = "clinic"

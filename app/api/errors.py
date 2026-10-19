@@ -1,8 +1,16 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
+
 from app.services.booking import (
-    AppointmentAlreadyCancelled, AppointmentNotActive, BookingError, LeadTimeViolation,
-    NotFound, OutsideWorkingHours, SlotInPast, SlotMisaligned, SlotTaken,
+    AppointmentAlreadyCancelled,
+    AppointmentNotActive,
+    BookingError,
+    LeadTimeViolation,
+    NotFound,
+    OutsideWorkingHours,
+    SlotInPast,
+    SlotMisaligned,
+    SlotTaken,
 )
 
 _STATUS: dict[type[BookingError], int] = {

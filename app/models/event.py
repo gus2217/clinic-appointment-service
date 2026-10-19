@@ -1,9 +1,13 @@
 import uuid
 from datetime import datetime
+from typing import Any
+
 from sqlalchemy import DateTime, ForeignKey, String, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.db.base import Base
+
 
 class AppointmentEvent(Base):
     __tablename__ = "appointment_events"
@@ -15,5 +19,5 @@ class AppointmentEvent(Base):
     from_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     to_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

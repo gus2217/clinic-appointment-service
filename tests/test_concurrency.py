@@ -1,5 +1,7 @@
 import asyncio
+
 import pytest
+
 from tests.conftest import future_slot
 
 pytestmark = pytest.mark.asyncio

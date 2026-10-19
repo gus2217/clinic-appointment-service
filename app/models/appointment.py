@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime
+
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.db.base import Base
 
 STATUSES = ("pending", "booked", "cancelled", "completed", "no_show", "rejected", "expired")

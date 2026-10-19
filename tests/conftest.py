@@ -35,8 +35,20 @@ from app.models import Clinic, Doctor, DoctorWorkingHours, Patient  # noqa: E402
 
 CLINIC_TZ = ZoneInfo("Africa/Nairobi")
 
+def _reset_schema() -> None:
+    async def run() -> None:
+        engine = create_async_engine(settings.async_database_url)
+        async with engine.begin() as conn:
+            await conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+        await engine.dispose()
+
+    import asyncio
+    asyncio.run(run())
+
 @pytest.fixture(scope="session", autouse=True)
 def database() -> None:
+    _reset_schema()
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True, cwd=ROOT)
 
 @pytest.fixture()
