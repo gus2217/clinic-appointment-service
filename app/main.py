@@ -7,12 +7,17 @@ from fastapi.responses import JSONResponse, Response
 
 from app.api.errors import booking_error_handler
 from app.api.routes import appointments, availability, health, patients
+from app.core.config import settings
 from app.db.session import engine
 from app.services.booking import BookingError
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    if settings.environment == "production" and settings.auth_mode == "none":
+        raise RuntimeError(
+            "CLINIC_AUTH_MODE=none is refused when CLINIC_ENVIRONMENT=production"
+        )
     yield
     await engine.dispose()
 

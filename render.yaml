@@ -11,8 +11,10 @@ services:
         fromDatabase:
           name: savannah-clinic-db
           property: connectionString
-      - key: CLINIC_AUTH_REQUIRED
-        value: "true"
+      - key: CLINIC_ENVIRONMENT
+        value: "production"
+      - key: CLINIC_AUTH_MODE
+        value: "gateway"
       - key: CLINIC_CLINIC_TIMEZONE
         value: Africa/Nairobi
       - key: CLINIC_SLOT_MINUTES

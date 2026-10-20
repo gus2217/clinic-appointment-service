@@ -20,7 +20,7 @@ jobs:
     env:
       CLINIC_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/clinicdb_test
       CLINIC_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/clinicdb_test
-      CLINIC_AUTH_REQUIRED: "false"
+      CLINIC_AUTH_MODE: "none"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -1,17 +1,25 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CLINIC_", env_file=".env", extra="ignore")
 
+    environment: Literal["local", "staging", "production"] = "local"
     database_url: str = "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/clinicdb"
     clinic_timezone: str = "Africa/Nairobi"
     slot_minutes: int = 30
     lead_time_minutes: int = 60
 
-    # Deny by default: an unauthenticated caller must never inherit admin rights.
-    auth_required: bool = True
-    trusted_proxy: bool = True
+    # Identity resolution: see app/api/auth.py. Fail closed by default.
+    auth_mode: Literal["none", "gateway", "jwt"] = "gateway"
+    # Only these TCP peers may assert X-Actor-* headers (gateway mode).
+    trusted_proxy_cidrs: str = "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    # Bearer-token mode (HS256 shared secret with the issuing service).
+    jwt_secret: str = ""
+    jwt_issuer: str = ""
+    jwt_audience: str = ""
 
     pool_size: int = 5
     max_overflow: int = 5

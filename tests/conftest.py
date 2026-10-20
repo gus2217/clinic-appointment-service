@@ -25,7 +25,7 @@ def _load_env() -> None:
 
 _load_env()
 # Tests exercise the handler logic, not the auth gate: force it off explicitly.
-os.environ["CLINIC_AUTH_REQUIRED"] = "false"
+os.environ["CLINIC_AUTH_MODE"] = "none"
 BASE = os.environ.get("CLINIC_TEST_DATABASE_URL") or os.environ["CLINIC_DATABASE_URL"]
 TEST_DB = BASE.replace("/clinicdb", "/clinicdb_test") if BASE.endswith("/clinicdb") else BASE
 os.environ["CLINIC_DATABASE_URL"] = TEST_DB
