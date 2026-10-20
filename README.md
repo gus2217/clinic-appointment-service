@@ -249,13 +249,26 @@ in CI so a red pipeline blocks a merge.
 
 ## Deployment and CI/CD
 
-- Multi-stage image; the entrypoint runs migrations then serves, so a deploy can never
-  serve an old schema.
-- GitHub Actions: on **pull request**, lint, type-check and test; on **merge to main**,
-  re-run the suite and deploy, followed by a `/health` smoke check.
-- Platform auto-deploy is disabled; a deployment only follows a green pipeline.
+**Public URL:** https://clinic-appointment-service.onrender.com
 
----
+**Deploy branch:** `main`. A merge into `main` is the only thing that triggers a
+deployment.
+
+- **Image:** multi-stage Docker build. The builder installs the package into
+  `/opt/venv`; the runtime image copies that venv, runs as an unprivileged user, and
+  health-checks `/health`. The entrypoint runs `alembic upgrade head` and then serves
+  Uvicorn on `$PORT`, so a deploy can never serve an old schema.
+- **Pipeline:** GitHub Actions runs `ruff`, `mypy` (strict) and `pytest` with the 85%
+  coverage gate on every pull request. On a merge to `main` the suite runs again; only
+  if it is green does the workflow POST the Render deploy hook and then poll `/health`
+  until it returns 200.
+- **Platform auto-deploy is disabled**, so a deployment only ever follows a green
+  pipeline.
+- **Database:** Neon PostgreSQL, reached over TLS (`sslmode=require`) through
+  `CLINIC_DATABASE_URL`.
+- **Auth is open by default** (`CLINIC_AUTH_REQUIRED=false`) so every endpoint is
+  directly callable for evaluation. When deployed behind a gateway, the
+  `X-Actor-Id` / `X-Actor-Role` headers it injects are honoured.
 
 ## Trade-offs
 

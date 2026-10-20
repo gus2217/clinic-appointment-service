@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: clinic-appointment-service
+    runtime: docker
+    plan: free
+    region: virginia
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: CLINIC_AUTH_REQUIRED
+        value: "false"
+      - key: CLINIC_CLINIC_TIMEZONE
+        value: Africa/Nairobi
+      - key: CLINIC_SLOT_MINUTES
+        value: "30"
+      - key: CLINIC_LEAD_TIME_MINUTES
+        value: "60"
+      # Set in the Render dashboard; never commit the Neon URL.
+      - key: CLINIC_DATABASE_URL
+        sync: false
