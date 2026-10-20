@@ -9,7 +9,8 @@ class Settings(BaseSettings):
     slot_minutes: int = 30
     lead_time_minutes: int = 60
 
-    auth_required: bool = False
+    # Deny by default: an unauthenticated caller must never inherit admin rights.
+    auth_required: bool = True
     trusted_proxy: bool = True
 
     pool_size: int = 5
@@ -19,7 +20,14 @@ class Settings(BaseSettings):
 
     @property
     def async_database_url(self) -> str:
-        # SQLAlchemy's psycopg dialect supports async; no asyncpg needed.
-        return self.database_url
+        # Managed providers hand out postgres:// or postgresql:// URLs; force the
+        # async psycopg 3 driver so create_async_engine never falls back to psycopg2.
+        url = self.database_url
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url[len("postgres://"):]
+        if url.startswith("postgresql://"):
+            url = "postgresql+psycopg://" + url[len("postgresql://"):]
+        return url
+
 
 settings = Settings()

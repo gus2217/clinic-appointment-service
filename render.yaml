@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: savannah-clinic
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /ready
+    autoDeploy: false
+    envVars:
+      - key: CLINIC_DATABASE_URL
+        fromDatabase:
+          name: savannah-clinic-db
+          property: connectionString
+      - key: CLINIC_AUTH_REQUIRED
+        value: "true"
+      - key: CLINIC_CLINIC_TIMEZONE
+        value: Africa/Nairobi
+      - key: CLINIC_SLOT_MINUTES
+        value: "30"
+      - key: CLINIC_LEAD_TIME_MINUTES
+        value: "60"
+
+databases:
+  - name: savannah-clinic-db
+    plan: free
+    databaseName: clinicdb
+    user: clinic

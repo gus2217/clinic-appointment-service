@@ -20,13 +20,22 @@ jobs:
     env:
       CLINIC_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/clinicdb_test
       CLINIC_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/clinicdb_test
+      CLINIC_AUTH_REQUIRED: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install -e .
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('pyproject.toml') }}
+      - run: pip install -e ".[dev]"
       - run: ruff check app tests
       - run: mypy app
+      - name: Migration drift check
+        run: |
+          alembic upgrade head
+          alembic check
       - run: pytest --cov=app --cov-report=term-missing
 
   deploy:
@@ -34,4 +43,25 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - run: echo "wire to Render/Fly deploy hook"
+      - name: Trigger deploy
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$HOOK" ]; then echo "RENDER_DEPLOY_HOOK_URL not set; skipping"; exit 0; fi
+          status=$(curl -sS -o /tmp/hook.out -w '%{http_code}' -X POST "$HOOK")
+          echo "deploy hook returned $status"
+          test "$status" = "200" -o "$status" = "201" -o "$status" = "202"
+      - name: Smoke check
+        env:
+          BASE_URL: ${{ secrets.DEPLOY_BASE_URL }}
+        run: |
+          if [ -z "$BASE_URL" ]; then echo "DEPLOY_BASE_URL not set; skipping"; exit 0; fi
+          for attempt in $(seq 1 30); do
+            if curl -fsS "$BASE_URL/health" >/dev/null && curl -fsS "$BASE_URL/ready" >/dev/null; then
+              echo "smoke ok"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "smoke failed"
+          exit 1

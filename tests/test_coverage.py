@@ -181,3 +181,33 @@ async def test_sweep_expires_stale_holds(client, seeded):
             "select status from appointment where id = :i"
         ), {"i": stale_id})).scalar()
     assert status == "expired"
+
+async def test_idempotency_store_race_returns_existing(client, seeded):
+    from app.repositories.idempotency import IdempotencyRepository
+
+    key = f"race-{uuid.uuid4()}"
+    async with SessionFactory() as first:
+        await IdempotencyRepository(first).store("actor-1", key, "hash-first", 201, {"id": "first"})
+        await first.commit()
+
+    async with SessionFactory() as second:
+        row = await IdempotencyRepository(second).store("actor-1", key, "hash-second", 201, {"id": "second"})
+        assert row.request_hash == "hash-first"
+        assert row.response_body == {"id": "first"}
+
+def test_database_url_normalisation():
+    from app.core.config import Settings
+
+    assert Settings(database_url="postgres://u:p@h/db").async_database_url == "postgresql+psycopg://u:p@h/db"
+    assert Settings(database_url="postgresql://u:p@h/db").async_database_url == "postgresql+psycopg://u:p@h/db"
+    assert Settings(database_url="postgresql+psycopg://u:p@h/db").async_database_url == "postgresql+psycopg://u:p@h/db"
+
+
+@pytest.mark.asyncio
+async def test_lifespan_shutdown_disposes_engine():
+    from app.db.session import engine
+    from app.main import app as application
+
+    async with application.router.lifespan_context(application):
+        pass
+    assert engine.pool.checkedin() == 0

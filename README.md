@@ -287,3 +287,52 @@ rejected because they moved correctness into application code.
 
 _Maintained alongside the code: any change to the design, API contract, or run
 instructions updates this document in the same commit._
+
+---
+
+## Deployment
+
+The service ships as a container. `docker-entrypoint.sh` runs `alembic upgrade head`
+and then starts Uvicorn on `$PORT` with proxy headers enabled, so platform-injected
+ports and reverse proxies work unchanged.
+
+### Container
+
+```bash
+docker build -t savannah-clinic .
+docker run --rm -p 8000:8000 \
+  -e CLINIC_DATABASE_URL="postgresql+psycopg://user:pass@host:5432/clinicdb" \
+  -e CLINIC_AUTH_REQUIRED=true \
+  savannah-clinic
+```
+
+The image runs as an unprivileged user (uid 10001) and carries a `/health`
+HEALTHCHECK.
+
+### Render
+
+`render.yaml` is a blueprint: a Docker web service plus managed PostgreSQL.
+`healthCheckPath` is `/ready`, which also checks the database connection.
+Set `CLINIC_AUTH_REQUIRED=true` in production; the application default is
+deny-by-default, so an unauthenticated caller never inherits admin rights.
+
+### CI/CD
+
+`.github/workflows/ci.yml` runs on every pull request and on `main`:
+
+1. `ruff check` and `mypy` (strict)
+2. `alembic upgrade head` then `alembic check` — fails on model/migration drift
+3. `pytest` with the coverage gate (85% minimum)
+
+On `main`, the deploy job calls `RENDER_DEPLOY_HOOK_URL` and then polls
+`DEPLOY_BASE_URL/health` and `/ready` until both return 200 (up to 5 minutes).
+Both are repository secrets; when unset the job skips instead of failing.
+
+### Required environment
+
+| Variable | Purpose |
+|---|---|
+| `CLINIC_DATABASE_URL` | `postgres://`, `postgresql://`, or `postgresql+psycopg://`; normalised to the async psycopg 3 driver |
+| `CLINIC_AUTH_REQUIRED` | `true` in production (deny by default) |
+| `CLINIC_CLINIC_TIMEZONE` | clinic timezone, default `Africa/Nairobi` |
+| `PORT` | injected by the platform, defaults to 8000 |
