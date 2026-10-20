@@ -8,7 +8,7 @@ from app.api import authz
 from app.api.deps import Principal, get_db, get_principal
 from app.api.schemas import AppointmentListOut, AppointmentOut
 from app.core.config import settings
-from app.directories.patients import PatientDirectory
+from app.directories.patients import build_patient_directory
 from app.services.appointments import AppointmentService
 from app.services.booking import NotFound
 
@@ -23,7 +23,7 @@ async def upcoming(
     principal: Principal = Depends(get_principal),
 ) -> AppointmentListOut:
     authz.can_list_patient(principal, str(patient_id))
-    if await PatientDirectory(db).get(patient_id) is None:
+    if await build_patient_directory(db).get(patient_id) is None:
         raise NotFound("Patient not found")
     rows = await AppointmentService(db).upcoming_for_patient(patient_id, limit, cursor)
     items = [AppointmentOut.from_model(r, settings.clinic_timezone) for r in rows]

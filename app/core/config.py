@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +12,12 @@ class Settings(BaseSettings):
     lead_time_minutes: int = 60
 
     auth_required: bool = False
+
+    # Directory services own doctor/patient data. local = seeded demo fixtures.
+    directory_mode: Literal["local", "http"] = "local"
+    doctors_url: str = ""
+    patients_url: str = ""
+    directory_timeout_seconds: float = 5.0
     trusted_proxy: bool = True
 
     pool_size: int = 5

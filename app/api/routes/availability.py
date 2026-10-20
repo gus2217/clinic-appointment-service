@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.api.schemas import AvailabilityOut, SlotOut
 from app.core.config import settings
-from app.directories.doctors import DoctorDirectory
+from app.directories.doctors import build_doctor_directory
 from app.services.availability import AvailabilityService
 from app.services.booking import NotFound
 
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/doctors", tags=["doctors"])
 async def availability(
     doctor_id: uuid.UUID, date: date, db: AsyncSession = Depends(get_db)
 ) -> AvailabilityOut:
-    doctor = await DoctorDirectory(db).get(doctor_id)
+    doctor = await build_doctor_directory(db).get(doctor_id)
     if doctor is None or not doctor.is_active:
         raise NotFound("Doctor not found")
     slots = await AvailabilityService(db).slots(doctor, date)
