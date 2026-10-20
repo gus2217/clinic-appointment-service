@@ -94,12 +94,12 @@ transaction; routes own HTTP and status mapping.
 
 ## Data model
 
-Six tables plus idempotency: `clinic`, `doctor`, `doctor_working_hours`,
-`doctor_time_off`, `patient`, `appointment`, `idempotency_keys`. All IDs are UUIDs.
+Eight tables: `clinic`, `doctor`, `doctor_working_hours`, `doctor_time_off`,
+`patient`, `appointment`, `appointment_events`, `idempotency_keys`. All IDs are UUIDs.
 
 Constraints on `appointment`:
 
-- status in `booked`, `cancelled`;
+- status in `pending`, `booked`, `cancelled`, `completed`, `no_show`, `rejected`, `expired`;
 - exactly 30 minutes;
 - slot aligned to the half-hour;
 - cancellation and reason are consistent;
