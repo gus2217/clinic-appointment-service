@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,7 +53,13 @@ class AppointmentRepository:
         rows = await self.session.scalars(
             select(Appointment).where(
                 Appointment.doctor_id == doctor_id,
-                Appointment.status == "booked",
+                or_(
+                    Appointment.status == "booked",
+                    and_(
+                        Appointment.status == "pending",
+                        Appointment.hold_expires_at > func.now(),
+                    ),
+                ),
                 Appointment.starts_at < end,
                 Appointment.ends_at > start,
             )
