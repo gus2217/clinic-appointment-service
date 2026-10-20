@@ -26,6 +26,7 @@ addopts = "-q"
 
 [tool.coverage.run]
 source = ["app"]
+concurrency = ["greenlet", "thread"]
 
 [tool.coverage.report]
 fail_under = 85
