@@ -1,7 +1,3 @@
-[build-system]
-requires = ["setuptools>=69"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "savannah-clinic"
 version = "1.0.0"
@@ -14,10 +10,6 @@ dependencies = [
   "pydantic==2.10.4",
   "pydantic-settings==2.7.0",
   "python-dateutil==2.9.0.post0",
-]
-
-[project.optional-dependencies]
-dev = [
   "pytest==8.3.4",
   "pytest-asyncio==0.25.0",
   "pytest-cov==6.0.0",
@@ -25,9 +17,6 @@ dev = [
   "ruff==0.8.4",
   "mypy==1.14.1",
 ]
-
-[tool.setuptools.packages.find]
-include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -51,6 +40,7 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+# FastAPI dependency injection requires Depends() in default arguments.
 [tool.ruff.lint.per-file-ignores]
 "app/api/routes/*.py" = ["B008"]
 

@@ -8,9 +8,9 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture()
 def auth_on(monkeypatch):
-    from app.api import auth
-    monkeypatch.setattr(auth.settings, "auth_mode", "gateway")
-    return auth
+    from app.api import deps
+    monkeypatch.setattr(deps.settings, "auth_required", True)
+    return deps
 
 async def test_missing_headers_401(client, seeded, auth_on):
     r = await client.get(f"/appointments/{uuid.uuid4()}")

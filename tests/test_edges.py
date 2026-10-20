@@ -13,9 +13,9 @@ CLINIC = ZoneInfo("Africa/Nairobi")
 
 @pytest.fixture()
 def auth_on(monkeypatch):
-    from app.api import auth
-    monkeypatch.setattr(auth.settings, "auth_mode", "gateway")
-    return auth
+    from app.api import deps
+    monkeypatch.setattr(deps.settings, "auth_required", True)
+    return deps
 
 async def _book(client, seeded, day, hour, headers=None, **extra):
     body = {"doctor_id": str(seeded["doctor"].id), "patient_id": str(seeded["patient"].id),

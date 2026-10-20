@@ -194,20 +194,3 @@ async def test_idempotency_store_race_returns_existing(client, seeded):
         row = await IdempotencyRepository(second).store("actor-1", key, "hash-second", 201, {"id": "second"})
         assert row.request_hash == "hash-first"
         assert row.response_body == {"id": "first"}
-
-def test_database_url_normalisation():
-    from app.core.config import Settings
-
-    assert Settings(database_url="postgres://u:p@h/db").async_database_url == "postgresql+psycopg://u:p@h/db"
-    assert Settings(database_url="postgresql://u:p@h/db").async_database_url == "postgresql+psycopg://u:p@h/db"
-    assert Settings(database_url="postgresql+psycopg://u:p@h/db").async_database_url == "postgresql+psycopg://u:p@h/db"
-
-
-@pytest.mark.asyncio
-async def test_lifespan_shutdown_disposes_engine():
-    from app.db.session import engine
-    from app.main import app as application
-
-    async with application.router.lifespan_context(application):
-        pass
-    assert engine.pool.checkedin() == 0

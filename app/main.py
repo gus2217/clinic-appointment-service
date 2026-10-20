@@ -1,33 +1,18 @@
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from app.api.errors import booking_error_handler
 from app.api.routes import appointments, availability, health, patients
-from app.core.config import settings
-from app.db.session import engine
 from app.services.booking import BookingError
 
-
-@asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    if settings.environment == "production" and settings.auth_mode == "none":
-        raise RuntimeError(
-            "CLINIC_AUTH_MODE=none is refused when CLINIC_ENVIRONMENT=production"
-        )
-    yield
-    await engine.dispose()
-
-
-app = FastAPI(title="Clinic Booking API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Clinic Booking API", version="1.0.0")
 app.include_router(health.router)
 app.include_router(appointments.router)
 app.include_router(availability.router)
 app.include_router(patients.router)
-
 
 @app.middleware("http")
 async def request_id(
@@ -38,9 +23,7 @@ async def request_id(
     response.headers["X-Request-Id"] = request.state.request_id
     return response
 
-
 app.add_exception_handler(BookingError, booking_error_handler)  # type: ignore[arg-type]
-
 
 @app.exception_handler(Exception)
 async def unhandled(request: Request, exc: Exception) -> JSONResponse:

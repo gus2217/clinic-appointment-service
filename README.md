@@ -247,73 +247,43 @@ in CI so a red pipeline blocks a merge.
 
 ---
 
-## Deployment
+## Deployment and CI/CD
 
-The service ships as a container. `docker-entrypoint.sh` runs `alembic upgrade head`
-then starts Uvicorn on `$PORT` with a 30-second graceful shutdown.
+- Multi-stage image; the entrypoint runs migrations then serves, so a deploy can never
+  serve an old schema.
+- GitHub Actions: on **pull request**, lint, type-check and test; on **merge to main**,
+  re-run the suite and deploy, followed by a `/health` smoke check.
+- Platform auto-deploy is disabled; a deployment only follows a green pipeline.
 
-### Identity: built for an auth gateway
+---
 
-This is one service in a larger ecosystem, so it does not implement login. It
-consumes a verified identity from the edge and supports two contracts:
+## Trade-offs
 
-| `CLINIC_AUTH_MODE` | Contract |
-|---|---|
-| `gateway` (default) | The gateway terminates credentials and forwards `X-Actor-Id` + `X-Actor-Role` (`admin`, `doctor`, `patient`). The headers are honoured **only** when the TCP peer is inside `CLINIC_TRUSTED_PROXY_CIDRS`; any other caller gets `403`, even with valid-looking headers. |
-| `jwt` | `Authorization: Bearer <jwt>`, HS256 with `CLINIC_JWT_SECRET`. Claims: `sub`, `role` (or `roles[0]`), `exp`, `nbf`. Optional `CLINIC_JWT_ISSUER` and `CLINIC_JWT_AUDIENCE` are enforced when set. |
-| `none` | Development and tests only. Startup fails if `CLINIC_ENVIRONMENT=production`. |
+- **Database constraint over application locking** — correctness is declarative and covers
+  every writer, including manual SQL.
+- **Computed availability instead of materialised slots** — no stale rows, no nightly job.
+- **Six tables** — a working, tested, deployed core beats a half-built larger surface.
+- **In-place reschedule** — atomicity is free; no per-appointment event history.
+- **Auth optional by default** — keeps the required endpoints callable for evaluation.
 
-Two deliberate choices protect the boundary:
+---
 
-- Uvicorn does **not** run with `--proxy-headers`, so `request.client.host` is
-  always the real TCP peer. A client-supplied `X-Forwarded-For` cannot fake a
-  trusted source.
-- Unknown roles are rejected before they reach the authorization matrix, so a
-  new role introduced upstream fails closed instead of silently granting access.
+## Growth
 
-The service should still only be reachable from the gateway network. The CIDR
-check is defence in depth for a misconfigured ingress, not a substitute for
-network policy.
+Services and variable durations (the constraint is range-based, so it survives), departments,
+approval workflow, rooms/equipment (same constraint pattern), notifications via outbox,
+and multi-clinic tenancy through the doctor.
 
-### Container
+---
 
-```bash
-docker build -t savannah-clinic .
-docker run --rm -p 8000:8000 \
-  -e CLINIC_DATABASE_URL="postgresql+psycopg://user:pass@host:5432/clinicdb" \
-  -e CLINIC_ENVIRONMENT=production \
-  -e CLINIC_AUTH_MODE=gateway \
-  savannah-clinic
-```
+## AI reflection
 
-The image runs as an unprivileged user (uid 10001) and carries a `/health`
-HEALTHCHECK.
+See `AI_REFLECTION.md`. In short: AI was used for scaffolding, edge-case test ideas, and
+pressure-testing the concurrency design. It was not used for the schema, the constraint
+choice, or the decision to enforce overlap in the database. Several suggestions were
+rejected because they moved correctness into application code.
 
-### Render
+---
 
-`render.yaml` is a blueprint: a Docker web service plus managed PostgreSQL.
-`healthCheckPath` is `/ready`, which also checks the database connection.
-
-### CI/CD
-
-`.github/workflows/ci.yml` runs on every pull request and on `main`:
-
-1. `ruff check` and `mypy` (strict)
-2. `alembic upgrade head` then `alembic check` — fails on model/migration drift
-3. `pytest` with the coverage gate (85% minimum)
-
-On `main`, the deploy job calls `RENDER_DEPLOY_HOOK_URL` and then polls
-`DEPLOY_BASE_URL/health` and `/ready` until both return 200 (up to 5 minutes).
-Both are repository secrets; when unset the job skips instead of failing.
-
-### Environment
-
-| Variable | Purpose |
-|---|---|
-| `CLINIC_ENVIRONMENT` | `local` (default), `staging`, `production` |
-| `CLINIC_AUTH_MODE` | `gateway` (default), `jwt`, or `none` (local only) |
-| `CLINIC_TRUSTED_PROXY_CIDRS` | Comma-separated CIDRs allowed to assert identity headers |
-| `CLINIC_JWT_SECRET` / `_ISSUER` / `_AUDIENCE` | Bearer-token mode |
-| `CLINIC_DATABASE_URL` | `postgres://`, `postgresql://`, or `postgresql+psycopg://`; normalised to psycopg 3 async |
-| `CLINIC_CLINIC_TIMEZONE` | Clinic timezone, default `Africa/Nairobi` |
-| `PORT` | Injected by the platform, defaults to 8000 |
+_Maintained alongside the code: any change to the design, API contract, or run
+instructions updates this document in the same commit._
