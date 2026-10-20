@@ -12,7 +12,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_PASSWORD: ***
           POSTGRES_DB: clinicdb_test
         ports: ["5432:5432"]
         options: >-
@@ -34,4 +34,35 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - run: echo "wire to Render/Fly deploy hook"
+      - name: Trigger platform deploy
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL is not set; skipping deploy."
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/hook.out -w '%{http_code}' -X POST "$HOOK")
+          echo "deploy hook returned $code"
+          case "$code" in
+            200|201|202) ;;
+            *) echo "deploy hook failed with $code"; exit 1 ;;
+          esac
+
+      - name: Smoke check
+        env:
+          BASE_URL: ${{ secrets.DEPLOY_BASE_URL }}
+        run: |
+          if [ -z "$BASE_URL" ]; then
+            echo "DEPLOY_BASE_URL is not set; skipping smoke check."
+            exit 0
+          fi
+          for attempt in $(seq 1 30); do
+            if curl -fsS "$BASE_URL/health" > /dev/null; then
+              echo "smoke check passed"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "smoke check failed"
+          exit 1
