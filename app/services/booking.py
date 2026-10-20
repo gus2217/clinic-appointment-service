@@ -6,10 +6,10 @@ from sqlalchemy import func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.directories.doctors import DoctorDirectory
-from app.directories.patients import PatientDirectory
+from app.directories.contracts import DoctorView
+from app.directories.doctors import build_doctor_directory
+from app.directories.patients import build_patient_directory
 from app.models.appointment import Appointment
-from app.models.doctor import Doctor
 from app.repositories.appointments import AppointmentRepository, SlotTakenError
 
 HOLD_HOURS = 24
@@ -48,8 +48,8 @@ class BookingService:
     def __init__(self, session: AsyncSession, clinic_timezone: str | None = None) -> None:
         self.session = session
         self.tz = ZoneInfo(clinic_timezone or settings.clinic_timezone)
-        self.doctors = DoctorDirectory(session)
-        self.patients = PatientDirectory(session)
+        self.doctors = build_doctor_directory(session)
+        self.patients = build_patient_directory(session)
         self.appointments = AppointmentRepository(session)
 
     def _normalise(self, value: datetime) -> datetime:
@@ -58,7 +58,7 @@ class BookingService:
         return value
 
     async def _validate(
-        self, doctor: Doctor, starts_at: datetime, now: datetime
+        self, doctor: DoctorView, starts_at: datetime, now: datetime
     ) -> tuple[datetime, datetime]:
         local = self._normalise(starts_at).astimezone(self.tz)
         start_utc = local.astimezone(ZoneInfo("UTC"))
