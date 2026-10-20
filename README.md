@@ -32,13 +32,13 @@ You need Python 3.12 and PostgreSQL.
 - Create `clinicdb` and `clinicdb_test`.
 - Copy `.env.example` to `.env` and set `CLINIC_DATABASE_URL` and
   `CLINIC_TEST_DATABASE_URL`.
-- Install the project, run migrations, seed, start the server.
+- Install and migrate: pip install -e . ; alembic upgrade head ; python -m scripts.seed ; uvicorn app.main:app --reload
 
 The API runs at `http://127.0.0.1:8000`; interactive docs at `/docs`. A VS Code launch
 configuration is included, so F5 starts it with the virtual environment and `.env`.
 
 The seed creates five doctors with weekday hours 09:00–17:00 in Africa/Nairobi and three
-patients. It is idempotent and prints the generated GUIDs.
+patients. It prints the generated GUIDs. It is not idempotent: running it twice creates duplicate demo rows.
 
 ---
 
@@ -173,38 +173,100 @@ Decisions, stated plainly:
 
 ---
 
-## Endpoint test guide
+## Try the deployed API
 
-Current seed IDs (they change if you reseed; the seed prints the new ones):
+**Base URL:** https://clinic-appointment-service.onrender.com
 
-- **doctor_id:** `c149a8ba-aa8d-4d27-bdf0-254bf8b2f3c5`
-- **patient_id:** `0296a59f-19e6-47d5-bc50-5e0c08cf9926`
+Seeded with five doctors (Mon-Fri, 09:00-17:00 Africa/Nairobi) and three patients. Ids are stable until the database is reseeded; scripts/seed.py prints the current ones.
 
-Open `http://127.0.0.1:8000/docs` and use these full URLs. Pick a future weekday for dates.
+| Doctor | Id |
+|---|---|
+| Dr. Achieng | 6ad88888-ae86-45ca-ab0a-b2e5ddc0fb14 |
+| Dr. Bett | 891c1683-7204-44c7-a68d-9c1ca6a31814 |
+| Dr. Chege | efea9b80-d2f4-4a3b-906f-f4919fc59784 |
+| Dr. Odhiambo | 1b761fe4-fbcd-476d-8c10-2eeb7d905680 |
+| Dr. Wanjiku | cd955052-2fe8-4db1-b382-e5638beb9ab9 |
 
-| # | Endpoint | Full URL | Body | Expected |
-|---|---|---|---|---|
-| 1 | Availability | `GET http://127.0.0.1:8000/doctors/c149a8ba-aa8d-4d27-bdf0-254bf8b2f3c5/availability?date=2026-10-21` | — | 200, list of slots |
-| 2 | Book | `POST http://127.0.0.1:8000/appointments` | `{"doctor_id":"c149a8ba-aa8d-4d27-bdf0-254bf8b2f3c5","patient_id":"0296a59f-19e6-47d5-bc50-5e0c08cf9926","starts_at":"2026-10-21T10:00:00+03:00"}` | 201 |
-| 3 | Duplicate | same as #2 | same | 409 `SLOT_TAKEN` |
-| 4 | Get | `GET http://127.0.0.1:8000/appointments/<appointment_id>` | — | 200 |
-| 5 | Cancel | `PATCH http://127.0.0.1:8000/appointments/<appointment_id>/cancel` | `{"reason":"patient unwell"}` | 200, status cancelled |
-| 6 | Cancel again | same as #5 | same | 409 `APPOINTMENT_ALREADY_CANCELLED` |
-| 7 | Reschedule | `PATCH http://127.0.0.1:8000/appointments/<appointment_id>/reschedule` | `{"starts_at":"2026-10-22T11:00:00+03:00"}` | 200 |
-| 8 | Pending | `POST http://127.0.0.1:8000/appointments` | `{"doctor_id":"…","patient_id":"…","starts_at":"2026-10-23T09:00:00+03:00","requires_approval":true}` | 201, status pending |
-| 9 | Approve | `PATCH http://127.0.0.1:8000/appointments/<id>/approve` | — | 200, status booked |
-| 10 | Reject | `PATCH http://127.0.0.1:8000/appointments/<id>/reject` | `{"reason":"doctor unavailable"}` | 200, status rejected |
-| 11 | Complete | `PATCH http://127.0.0.1:8000/appointments/<id>/complete` | — | 200, status completed |
-| 12 | No-show | `PATCH http://127.0.0.1:8000/appointments/<id>/no-show` | — | 200, status no_show |
-| 13 | Events | `GET http://127.0.0.1:8000/appointments/<id>/events` | — | 200, audit rows |
-| 14 | Patient list | `GET http://127.0.0.1:8000/patients/0296a59f-19e6-47d5-bc50-5e0c08cf9926/appointments?limit=20` | — | 200, upcoming |
-| 15 | Health | `GET http://127.0.0.1:8000/health` | — | 200 |
-| 16 | Ready | `GET http://127.0.0.1:8000/ready` | — | 200 (DB reachable) |
+| Patient | Id |
+|---|---|
+| Patient One | 1b6c25f0-45c6-426a-a3dd-33ab4e226e9d |
+| Patient Two | 3e80c513-3391-40c4-aae9-802bb0ec7e3f |
+| Patient Three | 20922d98-a9b4-41fc-9c4b-07d01593d990 |
 
-For idempotency, send `Idempotency-Key: <any-unique-string>` and `X-Actor-Id: <id>` on
-`POST /appointments` twice; the second call returns the same appointment id.
+Dates must be future weekdays; doctors have no hours at weekends.
+
+~~~bash
+BASE=https://clinic-appointment-service.onrender.com
+DOCTOR=6ad88888-ae86-45ca-ab0a-b2e5ddc0fb14
+PATIENT=1b6c25f0-45c6-426a-a3dd-33ab4e226e9d
+DATE=$(date -d 'next monday' +%F)
+TEN="$DATE"T10:00:00+03:00
+ELEVEN="$DATE"T11:00:00+03:00
+~~~
+
+~~~bash
+curl -s $BASE/health
+curl -s $BASE/ready
+curl -s "$BASE/doctors/$DOCTOR/availability?date=$DATE" | head -c 300
+~~~
+
+~~~bash
+# book; copy the id from the response
+curl -s -X POST $BASE/appointments -H 'Content-Type: application/json' -d "{\"doctor_id\":\"$DOCTOR\",\"patient_id\":\"$PATIENT\",\"starts_at\":\"$TEN\"}"
+~~~
+
+~~~bash
+# the slot is now gone
+curl -s "$BASE/doctors/$DOCTOR/availability?date=$DATE" | grep -c "T10:00:00"
+APPT=<id from the booking response>
+curl -s -X PATCH $BASE/appointments/$APPT/cancel -H 'Content-Type: application/json' -d '{"reason":"patient unwell"}'
+# slot is free again
+curl -s "$BASE/doctors/$DOCTOR/availability?date=$DATE" | grep -c "T10:00:00"
+# second cancel -> 409 APPOINTMENT_ALREADY_CANCELLED
+curl -s -X PATCH $BASE/appointments/$APPT/cancel -H 'Content-Type: application/json' -d '{"reason":"again"}'
+~~~
+
+~~~bash
+# reschedule needs an active appointment
+curl -s -X PATCH $BASE/appointments/$APPT/reschedule -H 'Content-Type: application/json' -d "{\"starts_at\":\"$ELEVEN\"}"
+curl -s "$BASE/patients/$PATIENT/appointments?limit=20"
+~~~
+
+| Expected | Endpoint |
+|---|---|
+| 201 booked | POST /appointments |
+| 409 SLOT_TAKEN | second booking of the same slot |
+| 409 APPOINTMENT_ALREADY_CANCELLED | second cancel |
+| 422 SLOT_IN_PAST / LEAD_TIME_VIOLATION / SLOT_MISALIGNED / OUTSIDE_WORKING_HOURS | invalid bookings |
+| 200 | GET /appointments/{id}, /events, /patients/{id}/appointments |
+| 404 NOT_FOUND | unknown doctor, patient, or appointment |
+
+Idempotency: send the header Idempotency-Key: <unique-string> twice with the same body; the second call returns the same appointment. Reuse the key with a different body and the API returns 400 IDEMPOTENCY_CONFLICT.
 
 ---
+
+## Doctor and patient data
+
+This service does not assume it owns doctors or patients. Both are read through app/directories, a port with two adapters:
+
+- local (default): seeded rows, the demo placeholder.
+- http: calls the external services.
+
+~~~text
+CLINIC_DIRECTORY_MODE=local|http
+CLINIC_DOCTORS_URL=https://doctors.internal
+CLINIC_PATIENTS_URL=https://patients.internal
+~~~
+
+Contract:
+
+~~~text
+GET {doctors_url}/doctors/{id}   -> {"id","name","is_active","slot_minutes","working_hours":[{"weekday","start_time","end_time"}]}
+GET {patients_url}/patients/{id} -> {"id","name"}
+404 = unknown
+~~~
+
+CLINIC_DIRECTORY_MODE=http fails at boot if a URL is missing. appointment stores only the ids; migration 0004 dropped the local foreign keys so ids owned by another service are valid here.
 
 ## Testing
 
