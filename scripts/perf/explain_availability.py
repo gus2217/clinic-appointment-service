@@ -12,16 +12,15 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sqlalchemy import text
+
 from app.db.session import SessionFactory
+from app.directories import fixtures
 
 CLINIC = ZoneInfo("Africa/Nairobi")
 
 async def main() -> None:
+    doctor_id = next(iter(fixtures.FIXTURE_DOCTORS))
     async with SessionFactory() as db:
-        doctor_id = (await db.execute(text("select id from doctor limit 1"))).scalar()
-        if doctor_id is None:
-            print("no doctors seeded; run scripts/seed.py first")
-            return
         rows = (await db.execute(text("select count(*) from appointment"))).scalar()
         day = datetime.now(CLINIC) + timedelta(days=1)
         start = datetime.combine(day.date(), datetime.min.time(), tzinfo=CLINIC)

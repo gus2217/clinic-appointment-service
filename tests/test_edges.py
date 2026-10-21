@@ -3,9 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import text
 
-from app.db.session import SessionFactory
 from tests.conftest import future_slot
 
 pytestmark = pytest.mark.asyncio
@@ -31,17 +29,17 @@ async def test_naive_datetime_is_clinic_local(client, seeded):
     assert r.status_code == 201, r.text
     assert r.json()["starts_at"].endswith("+03:00")
 
-async def test_doctor_without_hours_has_no_slots(client):
-    async with SessionFactory() as db:
-        clinic = (await db.execute(text("select id from clinic limit 1"))).scalar()
-        if clinic is None:
-            await db.execute(text("INSERT INTO clinic (name) VALUES ('Edge Clinic')"))
-            await db.commit()
-            clinic = (await db.execute(text("select id from clinic limit 1"))).scalar()
-        doctor_id = (await db.execute(text(
-            "INSERT INTO doctor (clinic_id, name) VALUES (:c, 'No Hours') RETURNING id"
-        ), {"c": clinic})).scalar()
-        await db.commit()
+async def test_doctor_without_hours_has_no_slots(client, monkeypatch):
+    from app.directories import fixtures
+    from app.directories.contracts import DoctorView
+
+    doctor_id = uuid.uuid4()
+    doctors = dict(fixtures.FIXTURE_DOCTORS)
+    doctors[doctor_id] = DoctorView(
+        id=doctor_id, name="No Hours", is_active=True, slot_minutes=30, hours=()
+    )
+    monkeypatch.setattr(fixtures, "FIXTURE_DOCTORS", doctors)
+
     day = (datetime.now(CLINIC) + timedelta(days=3)).date()
     r = await client.get(f"/doctors/{doctor_id}/availability", params={"date": day.isoformat()})
     assert r.status_code == 200

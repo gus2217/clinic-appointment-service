@@ -32,13 +32,14 @@ You need Python 3.12 and PostgreSQL.
 - Create `clinicdb` and `clinicdb_test`.
 - Copy `.env.example` to `.env` and set `CLINIC_DATABASE_URL` and
   `CLINIC_TEST_DATABASE_URL`.
-- Install and migrate: pip install -e . ; alembic upgrade head ; python -m scripts.seed ; uvicorn app.main:app --reload
+- Install and run: pip install -e . ; alembic upgrade head ; uvicorn app.main:app --reload
 
 The API runs at `http://127.0.0.1:8000`; interactive docs at `/docs`. A VS Code launch
 configuration is included, so F5 starts it with the virtual environment and `.env`.
 
-The seed creates five doctors with weekday hours 09:00–17:00 in Africa/Nairobi and three
-patients. It prints the generated GUIDs. It is not idempotent: running it twice creates duplicate demo rows.
+Doctors and patients come from `app/directories/fixtures.py`: five doctors with weekday
+hours 09:00–17:00 in Africa/Nairobi and three patients, with fixed GUIDs. No database
+seeding is required. `CLINIC_DIRECTORY_MODE=http` switches to the external services.
 
 ---
 
@@ -94,8 +95,9 @@ transaction; routes own HTTP and status mapping.
 
 ## Data model
 
-Eight tables: `clinic`, `doctor`, `doctor_working_hours`, `doctor_time_off`,
-`patient`, `appointment`, `appointment_events`, `idempotency_keys`. All IDs are UUIDs.
+Three tables: `appointment`, `appointment_events`, `idempotency_keys`. All IDs are UUIDs.
+Doctors and patients are external (fixtures for the demo), so `appointment` stores only
+their ids.
 
 Constraints on `appointment`:
 
@@ -177,7 +179,7 @@ Decisions, stated plainly:
 
 **Base URL:** https://clinic-appointment-service.onrender.com
 
-Seeded with five doctors (Mon-Fri, 09:00-17:00 Africa/Nairobi) and three patients. Ids are stable until the database is reseeded; scripts/seed.py prints the current ones.
+The demo directory provides five doctors (Mon-Fri, 09:00-17:00 Africa/Nairobi) and three patients. Ids are fixed in `app/directories/fixtures.py`.
 
 | Doctor | Id |
 |---|---|
@@ -249,11 +251,11 @@ Idempotency: send the header Idempotency-Key: <unique-string> twice with the sam
 
 This service does not assume it owns doctors or patients. Both are read through app/directories, a port with two adapters:
 
-- local (default): seeded rows, the demo placeholder.
+- fixture (default): in-memory demo data with fixed ids.
 - http: calls the external services.
 
 ~~~text
-CLINIC_DIRECTORY_MODE=local|http
+CLINIC_DIRECTORY_MODE=fixture|http
 CLINIC_DOCTORS_URL=https://doctors.internal
 CLINIC_PATIENTS_URL=https://patients.internal
 ~~~
@@ -262,11 +264,12 @@ Contract:
 
 ~~~text
 GET {doctors_url}/doctors/{id}   -> {"id","name","is_active","slot_minutes","working_hours":[{"weekday","start_time","end_time"}]}
+GET {doctors_url}/doctors/{id}/time-off?from=&to= -> [{"starts_at","ends_at"}]
 GET {patients_url}/patients/{id} -> {"id","name"}
 404 = unknown
 ~~~
 
-CLINIC_DIRECTORY_MODE=http fails at boot if a URL is missing. appointment stores only the ids; migration 0004 dropped the local foreign keys so ids owned by another service are valid here.
+CLINIC_DIRECTORY_MODE=http fails at boot if a URL is missing. appointment stores only the ids; migration 0005 dropped the doctor and patient tables, so ids owned by another service are valid here.
 
 ## Testing
 
@@ -289,7 +292,7 @@ Two scripts, both runnable with `make perf`:
   access pattern.
 - `scripts/perf/load_book.py` fires concurrent bookings at one slot and asserts exactly
   one success, reporting p50 and p95 latency.
-- `scripts/perf/seed_bulk.py` generates doctors and appointments for realistic plans.
+- `scripts/perf/seed_bulk.py` generates appointments for realistic plans; doctors and patients come from fixtures.
 
 CI runs the structural checks (index used, one winner), not latency thresholds, because
 wall-clock assertions are flaky across runners.

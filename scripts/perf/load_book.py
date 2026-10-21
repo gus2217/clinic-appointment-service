@@ -10,19 +10,15 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
-from app.db.session import SessionFactory
+
+from app.directories import fixtures
 from app.main import app
 
 CLINIC = ZoneInfo("Africa/Nairobi")
 
 async def main(concurrency: int = 50) -> None:
-    async with SessionFactory() as db:
-        doctor = (await db.execute(text("select id from doctor limit 1"))).scalar()
-        patient = (await db.execute(text("select id from patient limit 1"))).scalar()
-    if doctor is None or patient is None:
-        print("seed first")
-        return
+    doctor = next(iter(fixtures.FIXTURE_DOCTORS))
+    patient = next(iter(fixtures.FIXTURE_PATIENTS))
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         slot = None

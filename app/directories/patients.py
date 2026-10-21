@@ -5,9 +5,8 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.directories import fixtures
 from app.directories.contracts import PatientView
-from app.directories.fixtures import FIXTURE_PATIENTS
-from app.models.patient import Patient
 
 
 class PatientDirectory(Protocol):
@@ -16,25 +15,12 @@ class PatientDirectory(Protocol):
     async def get(self, patient_id: uuid.UUID) -> PatientView | None: ...
 
 
-class LocalPatientDirectory:
-    """Demo placeholder. Backed by seeded rows until the patient service is wired."""
-
-    def __init__(self, session: AsyncSession) -> None:
-        self.session = session
-
-    async def get(self, patient_id: uuid.UUID) -> PatientView | None:
-        patient = await self.session.get(Patient, patient_id)
-        if patient is None:
-            return None
-        return PatientView(id=patient.id, name=patient.name)
-
-
 class FixturePatientDirectory:
     def __init__(self, session: AsyncSession | None = None) -> None:
         self.session = session
 
     async def get(self, patient_id: uuid.UUID) -> PatientView | None:
-        return FIXTURE_PATIENTS.get(patient_id)
+        return fixtures.FIXTURE_PATIENTS.get(patient_id)
 
 
 class HttpPatientDirectory:
@@ -63,13 +49,11 @@ class HttpPatientDirectory:
         return PatientView(id=uuid.UUID(str(payload["id"])), name=str(payload["name"]))
 
 
-def build_patient_directory(session: AsyncSession) -> PatientDirectory:
-    if settings.directory_mode == "fixture":
-        return FixturePatientDirectory(session)
+def build_patient_directory(session: AsyncSession | None = None) -> PatientDirectory:
     if settings.directory_mode == "http":
         if not settings.patients_url:
             raise RuntimeError(
                 "CLINIC_PATIENTS_URL is required when CLINIC_DIRECTORY_MODE=http"
             )
         return HttpPatientDirectory(settings.patients_url)
-    return LocalPatientDirectory(session)
+    return FixturePatientDirectory(session)

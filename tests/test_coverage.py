@@ -118,17 +118,20 @@ async def test_get_unknown_appointment_404(client):
     r = await client.get(f"/appointments/{uuid.uuid4()}")
     assert r.status_code == 404
 
-async def test_availability_unknown_and_inactive_doctor(client, seeded):
+async def test_availability_unknown_and_inactive_doctor(client, monkeypatch):
     day = (datetime.now(CLINIC) + timedelta(days=3)).date().isoformat()
     missing = await client.get(f"/doctors/{uuid.uuid4()}/availability", params={"date": day})
     assert missing.status_code == 404
 
-    async with SessionFactory() as db:
-        clinic_id = seeded["doctor"].clinic_id
-        inactive_id = (await db.execute(text(
-            "INSERT INTO doctor (clinic_id, name, is_active) VALUES (:c, 'Inactive', false) RETURNING id"
-        ), {"c": clinic_id})).scalar()
-        await db.commit()
+    from app.directories import fixtures
+    from app.directories.contracts import DoctorView
+
+    inactive_id = uuid.uuid4()
+    doctors = dict(fixtures.FIXTURE_DOCTORS)
+    doctors[inactive_id] = DoctorView(
+        id=inactive_id, name="Inactive", is_active=False, slot_minutes=30, hours=()
+    )
+    monkeypatch.setattr(fixtures, "FIXTURE_DOCTORS", doctors)
     inactive = await client.get(f"/doctors/{inactive_id}/availability", params={"date": day})
     assert inactive.status_code == 404
 
