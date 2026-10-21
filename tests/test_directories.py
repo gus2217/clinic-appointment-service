@@ -140,7 +140,7 @@ async def test_http_doctor_directory_time_off_follows_contract():
     )
     await client.aclose()
     assert len(rows) == 1
-    assert rows[0].starts_at.hour == 6  # 09:00+03:00 == 06:00Z
+    assert rows[0].starts_at.astimezone(UTC).hour == 6  # 09:00+03:00 == 06:00Z
 
 
 async def test_http_time_off_404_returns_empty():
