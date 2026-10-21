@@ -28,33 +28,40 @@ The brief invites decisions when requirements are ambiguous. These are mine:
    working hours (`start + 30 min ≤ close`).
 3. **Working hours** are per doctor, per weekday. No holiday calendar in v1; it is a
    documented extension.
-4. **Identity.** `doctor_id` and `patient_id` are pre-existing identifiers. The brief
-   does not ask for authentication, so the required endpoints are directly callable;
-   auth is an extension, not a precondition.
+4. **Identity and ownership.** `doctor_id` and `patient_id` are pre-existing
+   identifiers owned by external directory services. This service stores only the ids
+   and reads doctor facts (working hours, time-off, slot size) through a directory
+   port with `fixture` (demo and tests) and `http` adapters. Authentication is not
+   implemented: the gateway supplies identity, and the required endpoints stay
+   callable for evaluation.
 5. **"Not in the past"** means `starts_at > now`. The bonus tightens it to a
    **60-minute lead time**.
-6. **Cancellation is terminal** and requires a reason. **Reschedule is allowed only
-   from an active booking.**
+6. **Lifecycle.** An optional approval flow creates a `pending` hold that expires;
+   otherwise the appointment is `booked`. Cancellation is terminal and requires a
+   reason; reschedule is allowed only from `booked`; `completed` and `no_show` are
+   terminal.
 
 ## 1.3 Domain model
 
 ### Entities
 
+Owned here (three tables):
+
 | Entity | Responsibility | Key fields |
 |---|---|---|
-| **Doctor** | Who can be booked; owns hours | `id`, `name`, `clinic_id`, `is_active` |
-| **DoctorWorkingHours** | Weekly availability template | `doctor_id`, `weekday` (0–6), `start_time`, `end_time` |
+| **Appointment** | A booking and its lifecycle | `doctor_id`, `patient_id`, `starts_at`, `ends_at`, `status`, `cancel_reason`, `hold_expires_at` |
+| **AppointmentEvent** | Audit trail of transitions | `appointment_id`, `event_type`, `actor_id`, `from_status`, `to_status`, `reason` |
+| **IdempotencyKey** | Replay-safe POSTs | `actor_id`, `key`, `request_hash`, `response_body` |
+
+Read from directory services, never stored here:
+
+| Entity | Responsibility | Key fields |
+|---|---|---|
+| **Doctor** | Who can be booked | `id`, `name`, `is_active`, `slot_minutes`, `working_hours` |
 | **Patient** | Who books | `id`, `name` |
-| **Appointment** | A booking and its lifecycle | `doctor_id`, `patient_id`, `starts_at`, `ends_at`, `status`, `cancel_reason` |
-| **DoctorTimeOff** | Exceptions to the template | `doctor_id`, `starts_at`, `ends_at` |
-| **Clinic** | Tenancy + timezone | `id`, `name`, `timezone` |
 
 ```
-Clinic 1──* Doctor 1──* DoctorWorkingHours
-                 │
-                 ├──* DoctorTimeOff
-                 │
-                 └──* Appointment *──1 Patient
+Directory services ──ids──► Appointment ──1──* AppointmentEvent
 ```
 
 ### Invariants
@@ -81,7 +88,8 @@ HTTP layer        FastAPI routers: parse, validate shape, map errors to status c
 Service layer     Booking rules, transaction boundary, state transitions, Clock
 Domain layer      Pure functions: intervals, grid alignment, timezone conversion
 Repository layer  All SQL; translates DB constraint violations to domain errors
-Model layer       SQLAlchemy tables and constraints
+Model layer       SQLAlchemy tables for appointment, event and idempotency
+Directory layer   Doctor/patient ports + fixture/http adapters + TTL cache
 ```
 
 - **Domain** has no I/O and receives an injected `Clock`; `datetime.now()` is never
@@ -102,7 +110,9 @@ Model layer       SQLAlchemy tables and constraints
 | D4 | **30-minute slots in the core** | service-driven 5–30 min durations | The brief is explicit. Variable durations are a documented extension, not a contract change. |
 | D5 | **No auth on required endpoints** | JWT + roles from day one | The brief never asks; the evaluator must be able to call the endpoints directly. Auth is additive. |
 | D6 | **In-place reschedule** | cancel + create new row | Free + claim become one atomic `UPDATE`; no orphaned or duplicated slots. Event history is not required by the brief. |
-| D7 | **Six tables**, not twelve | departments, services, approvals, rooms | 3–5 days must yield a deployed, tested core. Extensions are documented, not half-built. |
+| D7 | **Three tables**, not twelve | owning doctor/patient rows; departments, services, approvals, rooms | The service owns only what it must transact on: appointments, their events and idempotency keys. |
+| D8 | **Directory port with fixture and HTTP adapters** | local tables; direct HTTP calls inside services | Doctor and patient data is owned elsewhere; fixtures keep the demo and tests deterministic, and the HTTP adapter is the production path. |
+| D9 | **Fail closed with a short TTL cache** | optimistic empty availability; no cache | A directory outage must not offer unverifiable slots: 503 with `Retry-After`. Caching doctor facts (10 min profile, 60 s time-off) keeps reads fast; writes bypass the time-off cache. |
 
 ## 1.6 Concurrency design (the core)
 
@@ -120,13 +130,15 @@ ALTER TABLE appointment
   ADD CONSTRAINT ex_doctor_no_overlap EXCLUDE USING gist (
     doctor_id WITH =,
     tstzrange(starts_at, ends_at, '[)') WITH &&
-  ) WHERE (status = 'booked');
+  ) WHERE (status IN ('pending','booked'));
 ```
 
 - Two concurrent inserts for the same slot: the second violates the constraint
   (SQLSTATE **23P01**), its transaction rolls back, and the API returns **409
   `SLOT_TAKEN`**.
-- The predicate `status = 'booked'` means a cancelled row no longer participates, so
+- The predicate `status IN ('pending','booked')` means a cancelled row no longer
+  participates while a pending hold does, so an approval slot cannot be
+  double-booked.
   the slot becomes bookable again without deleting history.
 - `[)` half-open ranges mean 09:00–09:30 and 09:30–10:00 do not overlap.
 
@@ -152,11 +164,13 @@ with the database.
 For a doctor and a clinic-local date:
 
 1. Resolve the date to the clinic timezone; reject malformed dates (**400**).
-2. Load the doctor's working hours for that weekday.
-3. Generate 30-minute grid slots from `start_time` to `end_time`, keeping only slots
-   whose end fits inside the hours.
-4. Remove slots overlapping `doctor_time_off`.
-5. Remove slots overlapping active appointments.
+2. Resolve the doctor through the directory port (fixture or HTTP). The profile is
+   cached for 10 minutes, keyed by directory URL and doctor id.
+3. Generate 30-minute grid slots from the doctor's working hours for that weekday,
+   keeping only slots whose end fits inside the session.
+4. Fetch time-off for the date range through the same port (60-second cache; the
+   write path passes `fresh=True`).
+5. Remove slots overlapping active appointments, including non-expired `pending` holds.
 6. Remove slots inside the lead-time window.
 7. Return UTC instants with explicit offsets, sorted ascending.
 
@@ -164,8 +178,8 @@ Cost is proportional to the doctor's daily hours (a handful of queries plus inte
 filtering), and both lookups are index-backed:
 
 ```sql
-CREATE INDEX ix_appt_doctor_day ON appointment (doctor_id, starts_at) WHERE status = 'booked';
-CREATE INDEX ix_appt_patient    ON appointment (patient_id, starts_at) WHERE status = 'booked';
+CREATE INDEX ix_appt_doctor_day ON appointment (doctor_id, starts_at) WHERE status IN ('pending','booked');
+CREATE INDEX ix_appt_patient    ON appointment (patient_id, starts_at) WHERE status IN ('pending','booked');
 ```
 
 Because availability is derived from hours minus exceptions minus bookings, there is
@@ -174,24 +188,31 @@ no "slot" row to keep in sync — the source of truth is the appointments table.
 ## 1.8 Appointment lifecycle
 
 ```
-            book
-   (none) ────────► booked ──── cancel ────► cancelled (terminal)
-                      │  ▲
-              reschedule  │
-                      └──┘
+                 requires_approval
+   (none) ─────────────────────────► pending ──approve──► booked
+                                        │                  │
+                                        ├──reject──► rejected (terminal)
+                                        └──hold expiry──► expired (terminal)
+
+   (none) ──book──► booked ──cancel──► cancelled (terminal)
+                      ├──complete──► completed (terminal)
+                      ├──no-show───► no_show (terminal)
+                      └──reschedule──► booked (in place)
 ```
 
-- `booked → cancelled`: requires a reason; cancelling twice returns **409**.
-- `booked → booked`: reschedule to a new valid slot; cancelled appointments cannot be
-  rescheduled (**409**).
-- No other transitions exist. Illegal transitions are explicit errors, not silent
-  no-ops.
+- `pending` rows carry `hold_expires_at`; the sweeper marks stale holds `expired`
+  before a new booking is validated, and availability ignores expired holds.
+- `booked → cancelled` requires a reason; cancelling twice returns **409**.
+- Reschedule is allowed only from `booked`; cancelled appointments return **409**.
+- `completed` and `no_show` are terminal. Illegal transitions are explicit errors,
+  not silent no-ops.
 
 ## 1.9 Timezone rules
 
 - Persist `timestamptz` (UTC). Never store naive local timestamps.
 - Working hours are clinic-local `time`; the conversion to UTC happens per date.
-- Reject naive input datetimes (**422**); require an explicit offset.
+- A naive input datetime is interpreted as clinic-local wall-clock time; an
+  explicit offset is honoured.
 - Return timestamps with offsets.
 - Interpret `?date=` as a clinic-local date.
 - Inject `Clock` so "now"-dependent rules are deterministic in tests.
@@ -204,6 +225,8 @@ no "slot" row to keep in sync — the source of truth is the appointments table.
 | Concurrent cancel | One 200; others 409 `APPOINTMENT_ALREADY_CANCELLED` |
 | Reschedule into a taken slot | 409; original appointment unchanged (rollback) |
 | Doctor/patient missing | 404; no partial write |
+| Directory unavailable | 503 `DIRECTORY_UNAVAILABLE` with `Retry-After`; no write |
+| Directory payload invalid | 503, treated as unavailable rather than as "no slots" |
 | Malformed date/body | 400/422; no write |
 | DB unavailable | 503 from the health-aware layer; transaction aborts |
 | Clock skew / DST edge | Clinic timezone conversion per date; UTC storage avoids ambiguity |
@@ -216,11 +239,15 @@ no "slot" row to keep in sync — the source of truth is the appointments table.
   becomes "doctors able to deliver this service at this time".
 - **Admin approval:** add `pending` to the active set with `hold_expires_at`.
 - **Auth and roles:** additive; required endpoints stay public for evaluation.
-- **Holidays/time off:** `doctor_time_off` already exists; add `clinic_closures`.
+- **Sessions and date overrides:** the directory contract carries a list of working
+  intervals per weekday and per-date overrides; this service only consumes them.
+- **Holidays/time off:** part of the directory contract; no local table to keep in
+  sync.
+- **Multi-clinic:** add `clinic_id` to `appointment` and scope every query by it.
+- **Shared cache:** process-local TTLs today; Redis or invalidation events when
+  running multiple workers.
 - **Rooms/equipment:** the same exclusion-constraint pattern on a second resource.
 - **Notifications:** an outbox row written in the booking transaction.
-- **Multi-clinic:** `clinic_id` on doctors; appointments derive tenancy through the
-  doctor.
 
 ## 1.12 Deliberately out of scope (v1)
 
