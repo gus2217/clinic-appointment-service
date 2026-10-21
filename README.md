@@ -275,6 +275,10 @@ Reads cache doctor facts: profile 10 minutes, time-off 60 seconds; writes pass
 `fresh=True` and bypass the time-off cache. A 5xx, timeout or malformed payload
 returns `503` with `Retry-After`; a 404 stays a 404.
 
+The caches are process-local and shared across requests (keyed by directory URL and
+doctor/date). With more than one worker each holds its own copy, so either accept one
+upstream fetch per worker per TTL or introduce a shared cache.
+
 ## Testing
 
 - API tests: every endpoint and every error code.

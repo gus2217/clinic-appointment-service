@@ -125,3 +125,56 @@ async def test_version_endpoint(client):
     r = await client.get("/version")
     assert r.status_code == 200
     assert "commit" in r.json()
+
+
+async def test_build_shares_process_wide_caches(monkeypatch):
+    from app.directories import doctors as module
+
+    monkeypatch.setattr(module.settings, "directory_mode", "http")
+    monkeypatch.setattr(module.settings, "doctors_url", "http://dir")
+    first = module.build_doctor_directory()
+    second = module.build_doctor_directory()
+    assert isinstance(first, module.HttpDoctorDirectory)
+    assert first._profiles is second._profiles
+    assert first._time_off is second._time_off
+    assert first._locks is second._locks
+
+
+async def test_shared_cache_skips_second_upstream_call():
+    from app.directories.cache import TTLCache
+
+    calls = {"first": 0, "second": 0}
+    doctor_id = uuid.uuid4()
+
+    def first_handler(request: httpx.Request) -> httpx.Response:
+        calls["first"] += 1
+        return httpx.Response(200, json=doctor_payload(doctor_id))
+
+    def second_handler(request: httpx.Request) -> httpx.Response:
+        calls["second"] += 1
+        return httpx.Response(500)
+
+    first_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(first_handler), base_url="http://dir"
+    )
+    second_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(second_handler), base_url="http://dir"
+    )
+    profiles = TTLCache(600)
+    time_off = TTLCache(60)
+    locks: dict[object, object] = {}
+
+    first = HttpDoctorDirectory(
+        "http://dir", client=first_client,
+        profile_cache=profiles, time_off_cache=time_off, locks=locks,
+    )
+    second = HttpDoctorDirectory(
+        "http://dir", client=second_client,
+        profile_cache=profiles, time_off_cache=time_off, locks=locks,
+    )
+
+    assert await first.get(doctor_id)
+    assert await second.get(doctor_id)
+    await first_client.aclose()
+    await second_client.aclose()
+    assert calls == {"first": 1, "second": 0}

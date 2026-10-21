@@ -14,6 +14,12 @@ from app.directories.cache import TTLCache
 from app.directories.contracts import DoctorView, TimeOff, WorkingHours
 from app.directories.errors import DirectoryUnavailable
 
+_PROFILE_CACHE: TTLCache[DoctorView] = TTLCache(settings.directory_cache_ttl_seconds)
+_TIME_OFF_CACHE: TTLCache[tuple[TimeOff, ...]] = TTLCache(
+    settings.directory_time_off_ttl_seconds
+)
+_LOCKS: dict[Hashable, asyncio.Lock] = {}
+
 
 class DoctorDirectory(Protocol):
     """Port: the only way the domain learns about a doctor."""
@@ -67,18 +73,21 @@ class HttpDoctorDirectory:
         profile_ttl: float | None = None,
         time_off_ttl: float | None = None,
         clock: Callable[[], float] = clock_module.monotonic,
+        profile_cache: TTLCache[DoctorView] | None = None,
+        time_off_cache: TTLCache[tuple[TimeOff, ...]] | None = None,
+        locks: dict[Hashable, asyncio.Lock] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.client = client
-        self._profiles: TTLCache[DoctorView] = TTLCache(
+        self._profiles = profile_cache if profile_cache is not None else TTLCache(
             settings.directory_cache_ttl_seconds if profile_ttl is None else profile_ttl,
             clock,
         )
-        self._time_off: TTLCache[tuple[TimeOff, ...]] = TTLCache(
+        self._time_off = time_off_cache if time_off_cache is not None else TTLCache(
             settings.directory_time_off_ttl_seconds if time_off_ttl is None else time_off_ttl,
             clock,
         )
-        self._locks: dict[Hashable, asyncio.Lock] = {}
+        self._locks = locks if locks is not None else {}
 
     def _lock(self, key: Hashable) -> asyncio.Lock:
         lock = self._locks.get(key)
@@ -105,11 +114,12 @@ class HttpDoctorDirectory:
         return response
 
     async def get(self, doctor_id: uuid.UUID) -> DoctorView | None:
-        cached = self._profiles.get(doctor_id)
+        profile_key = (self.base_url, doctor_id)
+        cached = self._profiles.get(profile_key)
         if cached is not None:
             return cached
-        async with self._lock(("profile", doctor_id)):
-            cached = self._profiles.get(doctor_id)
+        async with self._lock(("profile", profile_key)):
+            cached = self._profiles.get(profile_key)
             if cached is not None:
                 return cached
             response = await self._request(f"/doctors/{doctor_id}")
@@ -122,13 +132,13 @@ class HttpDoctorDirectory:
                 view = self._parse_doctor(payload)
             except (KeyError, TypeError, ValueError) as exc:
                 raise DirectoryUnavailable("directory returned an invalid doctor payload") from exc
-            self._profiles.set(doctor_id, view)
+            self._profiles.set(profile_key, view)
             return view
 
     async def time_off(
         self, doctor_id: uuid.UUID, start: datetime, end: datetime, *, fresh: bool = False
     ) -> tuple[TimeOff, ...]:
-        key = (doctor_id, start.isoformat(), end.isoformat())
+        key = (self.base_url, doctor_id, start.isoformat(), end.isoformat())
         if not fresh:
             cached = self._time_off.get(key)
             if cached is not None:
@@ -185,5 +195,10 @@ def build_doctor_directory(session: AsyncSession | None = None) -> DoctorDirecto
             raise RuntimeError(
                 "CLINIC_DOCTORS_URL is required when CLINIC_DIRECTORY_MODE=http"
             )
-        return HttpDoctorDirectory(settings.doctors_url)
+        return HttpDoctorDirectory(
+            settings.doctors_url,
+            profile_cache=_PROFILE_CACHE,
+            time_off_cache=_TIME_OFF_CACHE,
+            locks=_LOCKS,
+        )
     return FixtureDoctorDirectory(session)
