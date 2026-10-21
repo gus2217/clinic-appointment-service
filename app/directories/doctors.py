@@ -1,16 +1,13 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 from typing import Protocol, cast
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
+from app.directories import fixtures
 from app.directories.contracts import DoctorView, TimeOff, WorkingHours
-from app.directories.fixtures import FIXTURE_DOCTORS, FIXTURE_TIME_OFF
-from app.models.doctor import Doctor, DoctorTimeOff
 
 
 class DoctorDirectory(Protocol):
@@ -23,41 +20,6 @@ class DoctorDirectory(Protocol):
     ) -> tuple[TimeOff, ...]: ...
 
 
-class LocalDoctorDirectory:
-    """Demo placeholder. Backed by seeded rows until the doctor service is wired."""
-
-    def __init__(self, session: AsyncSession) -> None:
-        self.session = session
-
-    async def get(self, doctor_id: uuid.UUID) -> DoctorView | None:
-        doctor = await self.session.get(
-            Doctor, doctor_id, options=[selectinload(Doctor.hours)]
-        )
-        if doctor is None:
-            return None
-        return DoctorView(
-            id=doctor.id,
-            name=doctor.name,
-            is_active=doctor.is_active,
-            slot_minutes=doctor.slot_minutes,
-            hours=tuple(
-                WorkingHours(h.weekday, h.start_time, h.end_time) for h in doctor.hours
-            ),
-        )
-
-    async def time_off(
-        self, doctor_id: uuid.UUID, start: datetime, end: datetime
-    ) -> tuple[TimeOff, ...]:
-        rows = await self.session.scalars(
-            select(DoctorTimeOff).where(
-                DoctorTimeOff.doctor_id == doctor_id,
-                DoctorTimeOff.starts_at < end,
-                DoctorTimeOff.ends_at > start,
-            )
-        )
-        return tuple(TimeOff(r.starts_at, r.ends_at) for r in rows.all())
-
-
 class FixtureDoctorDirectory:
     """In-memory demo adapter: no database rows, deterministic ids."""
 
@@ -65,14 +27,14 @@ class FixtureDoctorDirectory:
         self.session = session
 
     async def get(self, doctor_id: uuid.UUID) -> DoctorView | None:
-        return FIXTURE_DOCTORS.get(doctor_id)
+        return fixtures.FIXTURE_DOCTORS.get(doctor_id)
 
     async def time_off(
         self, doctor_id: uuid.UUID, start: datetime, end: datetime
     ) -> tuple[TimeOff, ...]:
         return tuple(
             interval
-            for owner, interval in FIXTURE_TIME_OFF
+            for owner, interval in fixtures.FIXTURE_TIME_OFF
             if owner == doctor_id and interval.starts_at < end and interval.ends_at > start
         )
 
@@ -117,8 +79,8 @@ class HttpDoctorDirectory:
             hours=tuple(
                 WorkingHours(
                     int(cast(int, entry["weekday"])),
-                    __import__("datetime").time.fromisoformat(str(entry["start_time"])),
-                    __import__("datetime").time.fromisoformat(str(entry["end_time"])),
+                    time.fromisoformat(str(entry["start_time"])),
+                    time.fromisoformat(str(entry["end_time"])),
                 )
                 for entry in hours
             ),
@@ -137,20 +99,18 @@ class HttpDoctorDirectory:
         payload = cast(list[dict[str, object]], response.json())
         return tuple(
             TimeOff(
-                __import__("datetime").datetime.fromisoformat(str(entry["starts_at"])),
-                __import__("datetime").datetime.fromisoformat(str(entry["ends_at"])),
+                datetime.fromisoformat(str(entry["starts_at"])),
+                datetime.fromisoformat(str(entry["ends_at"])),
             )
             for entry in payload
         )
 
 
-def build_doctor_directory(session: AsyncSession) -> DoctorDirectory:
-    if settings.directory_mode == "fixture":
-        return FixtureDoctorDirectory(session)
+def build_doctor_directory(session: AsyncSession | None = None) -> DoctorDirectory:
     if settings.directory_mode == "http":
         if not settings.doctors_url:
             raise RuntimeError(
                 "CLINIC_DOCTORS_URL is required when CLINIC_DIRECTORY_MODE=http"
             )
         return HttpDoctorDirectory(settings.doctors_url)
-    return LocalDoctorDirectory(session)
+    return FixtureDoctorDirectory(session)

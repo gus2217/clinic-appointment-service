@@ -4,9 +4,7 @@ from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import text
 
-from app.db.session import SessionFactory
 from tests.conftest import future_slot
 
 pytestmark = pytest.mark.asyncio
@@ -41,14 +39,15 @@ async def test_book_unknown_patient(client, seeded):
     r = await client.post("/appointments", json=body)
     assert r.status_code == 404
 
-async def test_book_during_time_off(client, seeded):
+async def test_book_during_time_off(client, seeded, monkeypatch):
+    from app.directories import fixtures
+    from app.directories.contracts import TimeOff
+
     slot = future_slot(21, 10)
-    async with SessionFactory() as db:
-        await db.execute(text(
-            "INSERT INTO doctor_time_off (doctor_id, starts_at, ends_at) VALUES (:d, :s, :e)"
-        ), {"d": seeded["doctor"].id,
-            "s": slot - timedelta(minutes=30), "e": slot + timedelta(minutes=30)})
-        await db.commit()
+    monkeypatch.setattr(fixtures, "FIXTURE_TIME_OFF", (
+        (seeded["doctor"].id,
+         TimeOff(slot - timedelta(minutes=30), slot + timedelta(minutes=30))),
+    ))
     r = await _post(client, seeded, slot)
     assert r.status_code == 422
     assert r.json()["code"] == "OUTSIDE_WORKING_HOURS"
@@ -84,15 +83,16 @@ async def test_availability_excludes_booked_slot(client, seeded):
     starts = {s["starts_at"] for s in r.json()["slots"]}
     assert slot.isoformat() not in starts
 
-async def test_availability_excludes_time_off(client, seeded):
+async def test_availability_excludes_time_off(client, seeded, monkeypatch):
+    from app.directories import fixtures
+    from app.directories.contracts import TimeOff
+
     day = future_slot(25, 10).date()
-    async with SessionFactory() as db:
-        await db.execute(text(
-            "INSERT INTO doctor_time_off (doctor_id, starts_at, ends_at) VALUES (:d, :s, :e)"
-        ), {"d": seeded["doctor"].id,
-            "s": datetime.combine(day, dt_time(10, 0), tzinfo=CLINIC),
-            "e": datetime.combine(day, dt_time(11, 0), tzinfo=CLINIC)})
-        await db.commit()
+    monkeypatch.setattr(fixtures, "FIXTURE_TIME_OFF", (
+        (seeded["doctor"].id,
+         TimeOff(datetime.combine(day, dt_time(10, 0), tzinfo=CLINIC),
+                 datetime.combine(day, dt_time(11, 0), tzinfo=CLINIC))),
+    ))
     r = await client.get(f"/doctors/{seeded['doctor'].id}/availability",
                          params={"date": day.isoformat()})
     starts = {s["starts_at"] for s in r.json()["slots"]}

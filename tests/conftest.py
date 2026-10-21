@@ -28,10 +28,12 @@ BASE = os.environ.get("CLINIC_TEST_DATABASE_URL") or os.environ["CLINIC_DATABASE
 TEST_DB = BASE.replace("/clinicdb", "/clinicdb_test") if BASE.endswith("/clinicdb") else BASE
 os.environ["CLINIC_DATABASE_URL"] = TEST_DB
 
+from dataclasses import replace  # noqa: E402
+
 from app.core.config import settings  # noqa: E402
-from app.db.session import SessionFactory  # noqa: E402
+from app.directories import fixtures  # noqa: E402
+from app.directories.contracts import WorkingHours  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Clinic, Doctor, DoctorWorkingHours, Patient  # noqa: E402
 
 CLINIC_TZ = ZoneInfo("Africa/Nairobi")
 
@@ -57,22 +59,22 @@ async def client():
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
+@pytest.fixture(autouse=True)
+def week_long_hours(monkeypatch) -> None:
+    """Keep date arithmetic stable: every fixture doctor works every day in tests."""
+    hours = tuple(WorkingHours(day, time(9, 0), time(17, 0)) for day in range(7))
+    monkeypatch.setattr(
+        fixtures,
+        "FIXTURE_DOCTORS",
+        {key: replace(view, hours=hours) for key, view in fixtures.FIXTURE_DOCTORS.items()},
+    )
+
+
 @pytest.fixture()
 async def seeded():
-    async with SessionFactory() as db:
-        clinic = Clinic(name="Test Clinic")
-        db.add(clinic)
-        await db.flush()
-        doctor = Doctor(clinic_id=clinic.id, name="Dr. Test", slot_minutes=30)
-        db.add(doctor)
-        await db.flush()
-        for weekday in range(7):
-            db.add(DoctorWorkingHours(doctor_id=doctor.id, weekday=weekday,
-                                      start_time=time(9, 0), end_time=time(17, 0)))
-        patient = Patient(name="Patient One")
-        db.add(patient)
-        await db.commit()
-        return {"doctor": doctor, "patient": patient}
+    doctor = next(iter(fixtures.FIXTURE_DOCTORS.values()))
+    patient = next(iter(fixtures.FIXTURE_PATIENTS.values()))
+    return {"doctor": doctor, "patient": patient}
 
 def future_slot(days_ahead: int = 2, hour: int = 10, minute: int = 0):
     d = (date.today() + timedelta(days=days_ahead))
