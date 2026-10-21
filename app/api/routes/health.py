@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,3 +20,7 @@ async def health() -> dict[str, str]:
 async def ready(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     await db.execute(text("select 1"))
     return {"status": "ready"}
+
+@router.get("/version")
+async def version() -> dict[str, str]:
+    return {"commit": os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_SHA") or "unknown"}

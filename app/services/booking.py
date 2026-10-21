@@ -74,7 +74,7 @@ class BookingService:
             raise OutsideWorkingHours("Outside working hours")
         day_start = datetime.combine(local.date(), time.min, tzinfo=self.tz)
         time_off = await self.doctors.time_off(
-            doctor.id, day_start, day_start + timedelta(days=1)
+            doctor.id, day_start, day_start + timedelta(days=1), fresh=True
         )
         for off in time_off:
             if start_utc < off.ends_at and off.starts_at < start_utc + timedelta(
