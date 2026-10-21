@@ -1,5 +1,5 @@
 import uuid
-from datetime import time
+from datetime import UTC, time
 
 import httpx
 import pytest
@@ -94,3 +94,86 @@ def test_http_mode_selects_remote_adapter(monkeypatch):
     monkeypatch.setattr(module.settings, "directory_mode", "http")
     monkeypatch.setattr(module.settings, "doctors_url", "http://dir")
     assert isinstance(module.build_doctor_directory(None), HttpDoctorDirectory)  # type: ignore[arg-type]
+
+
+async def test_local_time_off_maps_to_view(seeded):
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import text
+
+    from app.db.session import SessionFactory
+    from app.directories.doctors import LocalDoctorDirectory
+
+    start = datetime.now().astimezone().replace(microsecond=0) + timedelta(days=3)
+    end = start + timedelta(hours=2)
+    async with SessionFactory() as db:
+        await db.execute(text(
+            "INSERT INTO doctor_time_off (doctor_id, starts_at, ends_at) VALUES (:d, :s, :e)"
+        ), {"d": seeded["doctor"].id, "s": start, "e": end})
+        await db.commit()
+        rows = await LocalDoctorDirectory(db).time_off(
+            seeded["doctor"].id, start - timedelta(hours=1), end + timedelta(hours=1)
+        )
+    assert len(rows) == 1
+    assert rows[0].starts_at == start
+    assert rows[0].ends_at == end
+
+
+async def test_http_doctor_directory_time_off_follows_contract():
+    from datetime import datetime, timedelta
+
+    doctor_id = uuid.uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/doctors/{doctor_id}/time-off"
+        assert request.url.params.get("from")
+        assert request.url.params.get("to")
+        return httpx.Response(200, json=[{
+            "starts_at": "2026-11-02T09:00:00+03:00",
+            "ends_at": "2026-11-02T11:00:00+03:00",
+        }])
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://dir")
+    start = datetime(2026, 11, 2, tzinfo=UTC)
+    rows = await HttpDoctorDirectory("http://dir", client=client).time_off(
+        doctor_id, start, start + timedelta(days=1)
+    )
+    await client.aclose()
+    assert len(rows) == 1
+    assert rows[0].starts_at.astimezone(UTC).hour == 6  # 09:00+03:00 == 06:00Z
+
+
+async def test_http_time_off_404_returns_empty():
+    from datetime import datetime
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(404)),
+        base_url="http://dir",
+    )
+    now = datetime.now(UTC)
+    assert await HttpDoctorDirectory("http://dir", client=client).time_off(
+        uuid.uuid4(), now, now
+    ) == ()
+    await client.aclose()
+
+
+async def test_fixture_directory_is_deterministic():
+    from datetime import datetime, timedelta
+
+    from app.directories.doctors import FixtureDoctorDirectory
+    from app.directories.fixtures import FIXTURE_DOCTORS
+
+    adapter = FixtureDoctorDirectory()
+    known = next(iter(FIXTURE_DOCTORS))
+    view = await adapter.get(known)
+    assert view is not None and view.name == FIXTURE_DOCTORS[known].name
+    assert await adapter.get(uuid.uuid4()) is None
+    now = datetime.now(UTC)
+    assert await adapter.time_off(known, now, now + timedelta(days=1)) == ()
+
+
+def test_fixture_mode_selects_fixture_adapter(monkeypatch):
+    from app.directories import doctors as module
+
+    monkeypatch.setattr(module.settings, "directory_mode", "fixture")
+    assert isinstance(module.build_doctor_directory(None), module.FixtureDoctorDirectory)  # type: ignore[arg-type]

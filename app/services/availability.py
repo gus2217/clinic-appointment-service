@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.directories.contracts import DoctorView
+from app.directories.doctors import build_doctor_directory
 from app.repositories.appointments import AppointmentRepository
 
 
@@ -13,6 +14,7 @@ class AvailabilityService:
         self.session = session
         self.tz = ZoneInfo(settings.clinic_timezone)
         self.repo = AppointmentRepository(session)
+        self.doctors = build_doctor_directory(session)
 
     async def slots(self, doctor: DoctorView, on_date: date) -> list[tuple[datetime, datetime]]:
         hours = [h for h in doctor.hours if h.weekday == on_date.weekday()]
@@ -21,7 +23,7 @@ class AvailabilityService:
         day_start = datetime.combine(on_date, time.min, tzinfo=self.tz)
         day_end = day_start + timedelta(days=1)
         booked = await self.repo.booked_between(doctor.id, day_start, day_end)
-        time_off = await self.repo.time_off_between(doctor.id, day_start, day_end)
+        time_off = await self.doctors.time_off(doctor.id, day_start, day_end)
         now = datetime.now(ZoneInfo("UTC"))
         lead = now + timedelta(minutes=settings.lead_time_minutes)
         result: list[tuple[datetime, datetime]] = []

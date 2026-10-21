@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass
-from datetime import time
+from datetime import datetime, time
 
 
 @dataclass(frozen=True)
@@ -8,6 +8,12 @@ class WorkingHours:
     weekday: int
     start_time: time
     end_time: time
+
+
+@dataclass(frozen=True)
+class TimeOff:
+    starts_at: datetime
+    ends_at: datetime
 
 
 @dataclass(frozen=True)

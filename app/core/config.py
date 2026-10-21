@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     auth_required: bool = False
 
     # Directory services own doctor/patient data. local = seeded demo fixtures.
-    directory_mode: Literal["local", "http"] = "local"
+    directory_mode: Literal["local", "http", "fixture"] = "local"
     doctors_url: str = ""
     patients_url: str = ""
     directory_timeout_seconds: float = 5.0
