@@ -7,7 +7,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.appointment import Appointment
-from app.models.doctor import DoctorTimeOff
 
 
 class SlotTakenError(Exception):
@@ -62,18 +61,6 @@ class AppointmentRepository:
                 ),
                 Appointment.starts_at < end,
                 Appointment.ends_at > start,
-            )
-        )
-        return rows.all()
-
-    async def time_off_between(
-        self, doctor_id: uuid.UUID, start: datetime, end: datetime
-    ) -> Sequence[DoctorTimeOff]:
-        rows = await self.session.scalars(
-            select(DoctorTimeOff).where(
-                DoctorTimeOff.doctor_id == doctor_id,
-                DoctorTimeOff.starts_at < end,
-                DoctorTimeOff.ends_at > start,
             )
         )
         return rows.all()
