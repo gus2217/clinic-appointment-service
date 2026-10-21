@@ -271,14 +271,21 @@ GET {patients_url}/patients/{id} -> {"id","name"}
 
 CLINIC_DIRECTORY_MODE=http fails at boot if a URL is missing. appointment stores only the ids; migration 0005 dropped the doctor and patient tables, so ids owned by another service are valid here.
 
+Reads cache doctor facts: profile 10 minutes, time-off 60 seconds; writes pass
+`fresh=True` and bypass the time-off cache. A 5xx, timeout or malformed payload
+returns `503` with `Retry-After`; a 404 stays a 404.
+
 ## Testing
 
 - API tests: every endpoint and every error code.
 - Timezone: local/UTC equivalence and offset handling.
 - Idempotency: replay returns the same appointment.
 - Concurrency: ten parallel bookings, one winner.
+- Directory boundary: cache hit and expiry, write-path cache bypass, upstream 5xx and
+  timeout mapping to `503 + Retry-After`, and the `/version` marker.
 - Tests run against a real PostgreSQL test database migrated by Alembic, so the tested
-  schema is the deployed schema.
+  schema is the deployed schema. Doctors and patients come from fixtures; no seeding
+  step is required.
 
 ---
 
@@ -325,8 +332,9 @@ deployment.
   Uvicorn on `$PORT`, so a deploy can never serve an old schema.
 - **Pipeline:** GitHub Actions runs `ruff`, `mypy` (strict) and `pytest` with the 85%
   coverage gate on every pull request. On a merge to `main` the suite runs again; only
-  if it is green does the workflow POST the Render deploy hook and then poll `/health`
-  until it returns 200.
+  if it is green does the workflow POST the Render deploy hook, poll `/health` until it
+  returns 200, and then poll `/version` until the reported commit matches the pushed
+  SHA — a green deploy proves the new instance is live, not just that something answered.
 - **Platform auto-deploy is disabled**, so a deployment only ever follows a green
   pipeline.
 - **Database:** Neon PostgreSQL, reached over TLS (`sslmode=require`) through
@@ -346,11 +354,79 @@ deployment.
 
 ---
 
-## Growth
+## Production path
 
-Services and variable durations (the constraint is range-based, so it survives), departments,
-approval workflow, rooms/equipment (same constraint pattern), notifications via outbox,
-and multi-clinic tenancy through the doctor.
+### Today
+
+One clinic, one timezone, 30-minute slots. Doctors and patients come from the fixture
+directory; `appointment`, `appointment_events` and `idempotency_keys` are the only
+tables this service owns. Auth is open for evaluation. A merge to `main` deploys, and
+the pipeline verifies the deployed commit through `/version`.
+
+### Target
+
+Doctor and patient data is owned by directory services. This service owns the slot grid,
+bookings, holds, cancellation, rescheduling and the overlap guarantee.
+
+~~~text
+GET {doctors_url}/doctors/{id}
+    {"id","name","is_active","slot_minutes",
+     "working_hours":[{"weekday","start_time","end_time"}],
+     "overrides":[{"date","intervals"}]}
+
+GET {doctors_url}/doctors/{id}/time-off?from=&to=
+    [{"starts_at","ends_at"}]
+
+GET {patients_url}/patients/{id}
+    {"id","name"}
+
+404 = unknown
+~~~
+
+Switch with `CLINIC_DIRECTORY_MODE=http` plus the two URLs. Fixtures remain for tests
+and local demos.
+
+### Boundary policy
+
+| Data | Cache | On outage |
+|---|---|---|
+| doctor profile | 10 min | serve cache, else 503 |
+| time-off (reads) | 60 s | serve cache, else 503 |
+| time-off (writes) | bypass (`fresh=True`) | 503 |
+| computed slots | never | — |
+
+Failures are typed: `404` stays `404`; 5xx, timeout and malformed payloads become
+`503 DIRECTORY_UNAVAILABLE` with `Retry-After`. The service refuses to answer rather
+than offer a slot it cannot verify.
+
+### Scheduling evolution
+
+- **Sessions** — several `[start, end)` intervals per weekday per doctor. The contract
+  and schema already allow a list; the fixture uses a single 09:00–17:00 block.
+- **Date overrides** — holidays, extra clinics, room closures.
+- **Per-service duration and buffers** — 15/30/45-minute appointment types.
+- **Booking horizon, lead time, overbooking policy** per clinic.
+- **24/7 services** (dialysis, emergency) modelled as sessions; on-call rotas stay a
+  staffing concern, not bookable inventory.
+
+### Scale and operations
+
+- **Multi-clinic tenancy** — add `clinic_id` to `appointment` and scope every query.
+- **Events** — an outbox table for `appointment.created/cancelled/rescheduled`, consumed
+  by notifications and analytics. `appointment_events` is the audit trail, not a bus.
+- **Security** — mTLS or JWT between services; identity headers only from the gateway;
+  rate limiting at the edge.
+- **Observability** — propagate `X-Request-Id`, emit dependency latency and 503 counters,
+  alert on directory error rate.
+- **Deployment** — staging environment, canary by doctor service, and the existing commit
+  check extended with a smoke booking against a staging slot.
+
+### Rollout
+
+1. Stand up the doctor and patient services against the contract above.
+2. Run `CLINIC_DIRECTORY_MODE=http` in staging and compare availability with fixture mode.
+3. Canary one doctor; watch the 503 rate and latency.
+4. Keep fixtures for tests only.
 
 ---
 
