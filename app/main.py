@@ -4,8 +4,9 @@ from collections.abc import Awaitable, Callable
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
-from app.api.errors import booking_error_handler
+from app.api.errors import booking_error_handler, directory_unavailable_handler
 from app.api.routes import appointments, availability, health, patients
+from app.directories.errors import DirectoryUnavailable
 from app.services.booking import BookingError
 
 app = FastAPI(title="Clinic Booking API", version="1.0.0")
@@ -24,6 +25,7 @@ async def request_id(
     return response
 
 app.add_exception_handler(BookingError, booking_error_handler)  # type: ignore[arg-type]
+app.add_exception_handler(DirectoryUnavailable, directory_unavailable_handler)  # type: ignore[arg-type]
 
 @app.exception_handler(Exception)
 async def unhandled(request: Request, exc: Exception) -> JSONResponse:

@@ -66,3 +66,26 @@ jobs:
           done
           echo "smoke check failed"
           exit 1
+
+      - name: Verify deployed commit
+        env:
+          BASE_URL: ${{ secrets.DEPLOY_BASE_URL }}
+        run: |
+          if [ -z "$BASE_URL" ]; then
+            echo "DEPLOY_BASE_URL is not set; skipping commit check."
+            exit 0
+          fi
+          for attempt in $(seq 1 30); do
+            commit=$(curl -fsS "$BASE_URL/version" | python -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
+            case "$GITHUB_SHA" in
+              "$commit"*)
+                if [ -n "$commit" ] && [ "$commit" != "unknown" ]; then
+                  echo "deployed commit $commit"
+                  exit 0
+                fi
+                ;;
+            esac
+            sleep 10
+          done
+          echo "deployment did not report commit $GITHUB_SHA"
+          exit 1

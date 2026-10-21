@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     doctors_url: str = ""
     patients_url: str = ""
     directory_timeout_seconds: float = 5.0
+    directory_cache_ttl_seconds: float = 600.0
+    directory_time_off_ttl_seconds: float = 60.0
+    directory_retry_after_seconds: int = 30
     trusted_proxy: bool = True
 
     pool_size: int = 5
