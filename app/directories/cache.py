@@ -22,3 +22,6 @@ class TTLCache[T]:
 
     def set(self, key: Hashable, value: T) -> None:
         self._items[key] = (self._clock() + self._ttl, value)
+
+    def clear(self) -> None:
+        self._items.clear()
