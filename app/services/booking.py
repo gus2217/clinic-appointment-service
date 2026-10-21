@@ -73,7 +73,7 @@ class BookingService:
         if not any(h.start_time <= local.time() and end_local.time() <= h.end_time for h in hours):
             raise OutsideWorkingHours("Outside working hours")
         day_start = datetime.combine(local.date(), time.min, tzinfo=self.tz)
-        time_off = await self.appointments.time_off_between(
+        time_off = await self.doctors.time_off(
             doctor.id, day_start, day_start + timedelta(days=1)
         )
         for off in time_off:
