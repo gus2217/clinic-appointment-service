@@ -1,113 +1,64 @@
-# AI reflection
+# AI Reflection (Section 4)
 
-A note on how this service was built, and where the line between my judgment and the
-model's output sits.
+**My AI setup.** A coding agent wrote most of the code. Claude, in a chat window, was what I used to think through design decisions, write the build spec, and review what the agent produced. I supplied the talking points for this file; AI wrote the raw text, and I edited it so it says what happened.
 
-## The setup
+**How I worked.** I wrote down what had to be true — the tables, constraints, lifecycle, error codes, the timezone rule — and gave the agent one slice at a time on its own branch: a router, a migration, a test module. I read every diff, with most of my attention on the SQL, the transaction boundaries, and whether the tests checked behaviour or only status codes. Then I ran ruff, mypy and pytest behind an 85% coverage gate and tried to break the thing by hand. Failures went back to the agent with the failing test and the logs. After each merge I hit the live URL and checked that /version reported the commit I had just merged.
 
-I work spec-first. Before any code is generated I write down what must be true: the three
-tables, the exclusion constraints, the lifecycle and its legal transitions, the error
-codes, the timezone rule. Those are decisions, not drafts. The schema in `alembic/`
-implements that spec; it was not discovered by an agent.
-
-From there the work runs as a loop with agents:
-
-1. **Scaffold.** One slice at a time — an adapter, a router, a migration, a test module —
-   against the written contract, in its own branch. Nothing spans two slices in one pass.
-2. **Review.** I read every diff. Not a skim: the SQL, the transaction boundaries, and
-   whether the tests assert behaviour or only status codes.
-3. **Test, then hard-test.** `ruff`, `mypy`, `pytest` and the coverage gate run.
-   Then I attack it: two `psql` sessions racing the same slot, a key replayed twice, an
-   expired hold swept, the directory returning 500.
-4. **Fix.** Failures go back to an agent with the failing test and the logs. I re-run the
-   gates myself.
-5. **Ship.** Branch, PR, green CI, merge, deploy, then hit the live URL and confirm
-   `/version` reports the commit I merged.
-
-The final pass before submission ran the same way. Reading every module turned up two
-copies of the hold-expiry SQL — the duplication that had already produced one bug — dead
-configuration, an unused dependency, and seven route handlers that differed only in the
-operation they called. Those became one repository method, one `_mutate` helper, and less
-code overall. A live smoke test against a real Uvicorn process and PostgreSQL then booked,
-replayed, conflicted and cancelled twice, and checked the status codes.
-
-The agents are fast in the middle of that loop. The first and last steps are mine, and so
-is anything the loop discovers.
+What follows is where AI helped, where it was wrong, and what I decided on my own.
 
 ## 1. What I used AI for across the four sections
 
-**Design.** As a critic, not an author. I wrote the entities, the constraint and the
-lifecycle; I used the model to argue against them — what breaks if two requests hit the
-same slot, what this looks like at a thousand bookings a day. Most of its alternatives
-moved correctness into application code, and I rejected them.
+- **Section 1, system design.** AI was a sounding board. I framed the service as a booking microservice and asked Claude to find holes in it: what breaks if two requests hit the same slot, what this looks like at a thousand bookings a day. It helped me compare lifecycle designs and how real hospital systems model appointment states. I decided what the service owns.
 
-**Implementation.** The parts that are mechanical once the design is fixed: router
-signatures, Pydantic schemas, Alembic boilerplate, the HTTP adapter behind the directory
-port, and the first draft of test matrices for timezone edges.
+- **Section 2, API implementation.** The agent wrote most of the code from my written contract: router signatures, Pydantic schemas, Alembic boilerplate, the HTTP adapter behind the directory port, and first drafts of the timezone test matrices. It also proposed boundary cases I had not written down — naive datetimes, rescheduling into a taken slot, a key replayed after a partial failure.
 
-**Testing and quality.** Two concrete wins: it found the coverage measurement bug below,
-and it proposed boundary cases I had not written — naive datetimes, rescheduling into a
-taken slot, a key replayed after a partial failure.
+- **Section 3, deployment and CI/CD.** The agent drafted the GitHub Actions workflow, the Render configuration and the smoke script. Every one of those drafts had a defect that CI or a real deploy caught.
 
-**Delivery.** Drafting the CI workflow, the Render configuration and the smoke script.
-Every one of those drafts had a defect that CI or a deploy caught. See below.
+- **Section 4, this reflection.** AI wrote the raw text from my talking points. I edited it so it says what happened.
 
-## 2. One suggestion that improved the work
+## 2. One example where an AI suggestion improved my work
 
-Coverage stalled at 81% while every new test passed. I asked:
+**Coverage stuck at 81% while every test passed.**
 
-> "pytest-cov reports these lines as uncovered, but the endpoint tests call them and
-> return 200. Why would coverage miss code after an `await`?"
+The endpoint tests hit the database-backed routes and returned 200, but pytest-cov kept reporting the lines after each database await as uncovered. I asked:
 
-The answer: SQLAlchemy's async engine switches greenlets, and coverage.py stops attributing
-lines after the first database `await` unless `concurrency = ["greenlet", "thread"]` is
-set. The measurement was wrong, not the tests. That one setting took reported coverage to
-99% and stopped me writing tests to chase a number that did not exist. I would have spent
-an afternoon on phantom work.
+> "pytest-cov reports these lines as uncovered, but the endpoint tests call them and return 200. Why would coverage miss code after an await?"
 
-## 3. Where AI was wrong, and how I caught it
+The answer was a measurement artifact, not a test gap. SQLAlchemy's async engine uses greenlets internally to bridge async/await with its synchronous ORM internals. coverage.py does not follow execution into greenlets unless you tell it to, so after the first database await it stopped attributing lines to the test. The tests were fine. The measurement was wrong.
 
-The idempotency implementation. The first version stored the response but the route was
-pinned to `201 Created`, so a replay also answered 201 — as if it had created something.
-The conflict error was mapped to 400 while the code path produced 409, and the agent's own
-test asserted the wrong behaviour, so the suite stayed green.
+The fix was one setting:
 
-I caught it by using the API the way a client would: two identical `POST`s with the same
-`Idempotency-Key`, comparing status and body. `201` then `201` is not idempotent; it is
-two creates that happen to share an id. That sent me back to the contract — `201` first,
-`200` with the identical body on replay, `409` only when the key is reused with a
-different request.
+```toml
+[tool.coverage.run]
+concurrency = ["greenlet", "thread"]
+```
 
-Chasing that exposed a worse defect underneath: the appointment commit and the idempotency
-row were separate transactions, so a crash between them could double-book on retry. The
-fix was structural — claim the key first, then commit the work and the stored response
-together. The regression test fails the commit deliberately and asserts neither row
-survives. That test is the point; the status code was the symptom. The suite finished at 86 tests and 96.8% coverage, with the gate still at 85%.
+Reported coverage went from 81% into the high 90s. The suite now has 86 tests at 96.8%, with the gate still at 85%. Without that setting I would have spent an afternoon writing tests for code that was already covered.
 
-A smaller one: an agent-written Dockerfile ran `pip install .` before copying `app/`, so
-the image could never build. CI caught it, not review.
+## 3. One example where AI output was wrong or incomplete, and how I caught it
 
-## 4. Two decisions I made without AI
+**Idempotency that was not idempotent.**
 
-**The service owns three tables, not twelve.** Doctors and patients belong to directory
-services. I kept `appointment`, `appointment_events` and `idempotency_keys`, and put
-the boundary behind a port with fixture and HTTP adapters. Every suggestion to store
-doctor or patient rows locally made the demo easier and the system wrong: two sources of
-truth for working hours is a scheduling bug waiting for a holiday. I trusted my read of the
-deployment boundary because I own it — the gateway injects identity, and the directories
-already exist.
+The first version stored the response, but the route was hard-coded to 201 Created, so a replay also answered 201 — as if it had created something. The conflict case returned 400 where the contract said 409. The agent's own test asserted the wrong behaviour, so the suite stayed green.
 
-**Overlap is enforced by PostgreSQL, not by application code.** A read-then-write check
-passes every sequential test and still double-books under concurrency; the exclusion
-constraint holds for every writer, including someone at a `psql` prompt. I chose the
-declarative constraint over advisory locks and over application-level locking because it is
-the smaller invariant and it is provable: open two sessions, insert the same interval,
-watch the second fail.
+I caught it by using the API the way a client would: two identical POSTs with the same Idempotency-Key, then compared status and body. 201 then 201 is two creates that happen to share an id. I went back to the contract: 201 on the first call, 200 with the identical body on replay, and 409 only when the key is reused with a different request.
 
-In both cases the model was useful as an opponent. It was not useful as an authority,
-because it does not carry the failure modes I have already been burned by.
+The deeper problem sat underneath the status code. The appointment and the idempotency row were committed separately. The exclusion constraint still stops a double booking, but a crash between the two commits could leave a stored response pointing at an appointment that was never written, or a booking with no key, so a retry would get a confusing 409. The fix was to claim the key first, then commit the work and the stored response in one transaction. The regression test makes the commit fail on purpose and asserts that neither row survives.
 
----
+The lesson: a test written by the same agent that wrote the code shares its blind spots. The status code was the symptom. The transaction boundary was the real defect.
 
-*This page is part of the submission: when the design or the contract changes, it changes
-with them.*
+Smaller things, same pattern. The agent's Dockerfile ran pip install . before copying app/, so the image could not build — CI caught that one, not my review. My final read-through found two copies of the hold-expiry SQL that had already caused one bug, plus dead configuration, an unused dependency, and seven route handlers that differed only in the operation they called. I folded those into one repository method and one \_mutate helper, and the code got smaller.
+
+## 4. Two decisions I made without AI, and why I trusted my own judgment
+
+### Decision 1: the service owns appointments and nothing else
+
+An earlier iteration of mine owned doctor and patient tables; migration 0005 removes them. Doctors and patients now live behind a port, and this service stores only their IDs. The brief does not say who owns doctor data. I chose to treat this as a booking service that extends an existing platform. Claude helped with the shape of the port, not with where the boundary goes.
+
+Two copies of working hours is a scheduling bug waiting for the first holiday, and I could name the cost of my choice: the service now depends on the directories being available, so it fails closed with a 503 rather than offering slots it cannot verify. The README says so.
+
+### Decision 2: authentication is off by default, behind a flag
+
+The brief does not ask for authentication, and whoever evaluates this has to be able to call the endpoints directly. In production the gateway authenticates and sends identity headers; this service reads them and enforces roles when CLINIC_AUTH_REQUIRED is on. By default it is off, so the public demo has no access control — and the README says that plainly.
+
+This was a trade-off about my reader, and I know who the reader is. I did not need a model to tell me that a reviewer who cannot call the API cannot grade it.
