@@ -284,13 +284,17 @@ growth path above.
 
 One container image, built in two stages: a builder installs the package into
 `/opt/venv`; the runtime copies that venv, runs as an unprivileged user and declares a
-health check against `/health`. The entrypoint runs `alembic upgrade head` before
-starting Uvicorn, so a deploy cannot serve an old schema.
+health check against `/health`. The entrypoint takes a PostgreSQL advisory lock, runs `alembic upgrade head` with
+bounded retries, and then starts Uvicorn: a deploy cannot serve an old schema, and
+two instances cannot race the migration.
 
 Delivery is a straight line with a proof at the end: protected `main` → pull request →
-`ruff`, `mypy --strict`, `pytest` at an 85% coverage gate → squash merge → the same
-suite on `main` → Render deploy hook → poll `/health` → poll `/version` until the
-reported commit equals the merged SHA. The last step is the one that matters: a 200 from
+`ruff`, `mypy --strict`, `pytest` at an 85% coverage gate, `alembic check` and a Docker
+build → squash merge → the same suite on `main` → Render deploy hook → poll `/health` →
+poll `/version` until the reported commit equals the merged SHA, with ten-minute bounds.
+The last step is the one that matters: a 200 from an old instance proves nothing about
+the new code. The image carries runtime dependencies only; test and lint tools come
+from the `dev` extra in CI and are never shipped. The last step is the one that matters: a 200 from
 an old instance proves nothing about the new code.
 
 Operationally the service is stateless; all state is PostgreSQL. That keeps rollback

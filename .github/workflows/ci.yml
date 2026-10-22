@@ -1,12 +1,25 @@
 name: ci
+
 on:
   pull_request:
   push:
     branches: [main]
 
+# One run per ref: a newer push supersedes an in-flight run instead of racing it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -23,68 +36,76 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - run: pip install -e .
-      - run: ruff check app tests
-      - run: mypy app
-      - run: pytest --cov=app --cov-report=term-missing
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check app tests
+      - name: Types
+        run: mypy app
+      - name: Tests and coverage gate
+        run: pytest --cov=app --cov-report=term-missing
+      - name: Migration drift
+        run: alembic check
+      - name: Docker image builds
+        run: docker build -t clinic-api:ci .
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Trigger platform deploy
         env:
           HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: |
-          if [ -z "$HOOK" ]; then
-            echo "RENDER_DEPLOY_HOOK_URL is not set; skipping deploy."
-            exit 0
-          fi
-          code=$(curl -sS -o /tmp/hook.out -w '%{http_code}' -X POST "$HOOK")
+          set -eu
+          : "${HOOK:?RENDER_DEPLOY_HOOK_URL is not set}"
+          code=$(curl -sS --retry 3 --retry-delay 2 -o /tmp/hook.out -w '%{http_code}' -X POST "$HOOK")
           echo "deploy hook returned $code"
           case "$code" in
             200|201|202) ;;
-            *) echo "deploy hook failed with $code"; exit 1 ;;
+            *) echo "deploy hook failed with $code"; cat /tmp/hook.out; exit 1 ;;
           esac
 
-      - name: Smoke check
+      - name: Wait for health
         env:
           BASE_URL: ${{ secrets.DEPLOY_BASE_URL }}
         run: |
-          if [ -z "$BASE_URL" ]; then
-            echo "DEPLOY_BASE_URL is not set; skipping smoke check."
-            exit 0
-          fi
-          for attempt in $(seq 1 30); do
-            if curl -fsS "$BASE_URL/health" > /dev/null; then
-              echo "smoke check passed"
+          set -eu
+          : "${BASE_URL:?DEPLOY_BASE_URL is not set}"
+          for attempt in $(seq 1 60); do
+            if curl -fsS --max-time 10 "$BASE_URL/health" > /dev/null; then
+              echo "health check passed"
               exit 0
             fi
+            echo "health attempt $attempt/60 not ready"
             sleep 10
           done
-          echo "smoke check failed"
+          echo "health check failed"
           exit 1
 
       - name: Verify deployed commit
         env:
           BASE_URL: ${{ secrets.DEPLOY_BASE_URL }}
         run: |
-          if [ -z "$BASE_URL" ]; then
-            echo "DEPLOY_BASE_URL is not set; skipping commit check."
-            exit 0
-          fi
-          for attempt in $(seq 1 30); do
-            commit=$(curl -fsS "$BASE_URL/version" | python -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
-            case "$GITHUB_SHA" in
-              "$commit"*)
-                if [ -n "$commit" ] && [ "$commit" != "unknown" ]; then
-                  echo "deployed commit $commit"
+          set -eu
+          : "${BASE_URL:?DEPLOY_BASE_URL is not set}"
+          for attempt in $(seq 1 60); do
+            commit=$(curl -fsS --max-time 10 "$BASE_URL/version" | python -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
+            if [ -n "$commit" ] && [ "$commit" != "unknown" ]; then
+              case "$GITHUB_SHA" in
+                "$commit"*)
+                  echo "deployed commit $commit matches $GITHUB_SHA"
                   exit 0
-                fi
-                ;;
-            esac
+                  ;;
+              esac
+            fi
+            echo "deployed commit '$commit' does not match $GITHUB_SHA (attempt $attempt/60)"
             sleep 10
           done
           echo "deployment did not report commit $GITHUB_SHA"

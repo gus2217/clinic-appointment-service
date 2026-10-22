@@ -1,13 +1,13 @@
-.PHONY: install migrate seed run test lint typecheck check perf
+.PHONY: install migrate drift run test lint typecheck check perf
 
 install:
-	python -m pip install -e .
+	python -m pip install -e ".[dev]"
 
 migrate:
 	alembic upgrade head
 
-seed:
-	python scripts/seed.py
+drift:
+	alembic check
 
 run:
 	uvicorn app.main:app --reload --port 8000
@@ -26,3 +26,4 @@ check: lint typecheck test
 perf:
 	python scripts/perf/explain_availability.py
 	python scripts/perf/load_book.py
+	python scripts/perf/seed_bulk.py

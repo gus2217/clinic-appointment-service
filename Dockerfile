@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim-bookworm AS builder
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
@@ -11,7 +11,7 @@ COPY app ./app
 RUN pip install --no-build-isolation --upgrade "setuptools>=69" wheel \
     && pip install --no-build-isolation .
 
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim-bookworm AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
@@ -34,7 +34,7 @@ RUN chmod +x docker-entrypoint.sh \
 USER appuser
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:$${PORT:-8000}/health" || exit 1
 
 ENTRYPOINT ["./docker-entrypoint.sh"]

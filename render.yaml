@@ -5,8 +5,11 @@ services:
     plan: free
     region: virginia
     healthCheckPath: /health
+    maxShutdownDelaySeconds: 30
     autoDeploy: false
     envVars:
+      - key: CLINIC_DIRECTORY_MODE
+        value: fixture
       - key: CLINIC_AUTH_REQUIRED
         value: "false"
       - key: CLINIC_CLINIC_TIMEZONE
