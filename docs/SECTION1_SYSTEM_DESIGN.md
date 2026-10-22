@@ -53,17 +53,17 @@ The brief invites decisions when requirements are ambiguous. These are mine:
 
 Owned here (three tables):
 
-| Entity | Responsibility | Key fields |
+| Entity | Responsibility | Columns |
 |---|---|---|
-| **Appointment** | A booking and its lifecycle | `doctor_id`, `patient_id`, `starts_at`, `ends_at`, `status`, `cancel_reason`, `hold_expires_at` |
-| **AppointmentEvent** | Audit trail of transitions | `appointment_id`, `event_type`, `actor_id`, `from_status`, `to_status`, `reason` |
-| **IdempotencyKey** | Replay-safe POSTs | `actor_id`, `key`, `request_hash`, `response_body` |
+| **Appointment** | A booking and its lifecycle | `id`, `doctor_id`, `patient_id`, `starts_at`, `ends_at`, `duration_minutes`, `status`, `cancel_reason`, `cancelled_by`, `hold_expires_at`, `created_at`, `updated_at` |
+| **AppointmentEvent** | Audit trail of transitions | `id`, `appointment_id`, `event_type`, `actor_id`, `actor_role`, `from_status`, `to_status`, `reason`, `payload`, `created_at` |
+| **IdempotencyKey** | Replay-safe requests | `id`, `actor_id`, `endpoint`, `key`, `request_hash`, `state`, `status_code`, `response_body`, `created_at` |
 
 Read from directory services, never stored here:
 
 | Entity | Responsibility | Key fields |
 |---|---|---|
-| **Doctor** | Who can be booked | `id`, `name`, `is_active`, `slot_minutes`, `working_hours` |
+| **Doctor** | Who can be booked | `id`, `name`, `is_active`, `slot_minutes`, `hours` (wire name `working_hours`) |
 | **Patient** | Who books | `id`, `name` |
 
 ```
