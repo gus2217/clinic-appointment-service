@@ -4,10 +4,9 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
+from app.directories.cache import TTLCache
 from app.directories.doctors import HttpDoctorDirectory
 from app.directories.errors import DirectoryUnavailable
-
-pytestmark = pytest.mark.asyncio
 
 
 class Clock:
@@ -178,3 +177,11 @@ async def test_shared_cache_skips_second_upstream_call():
     await first_client.aclose()
     await second_client.aclose()
     assert calls == {"first": 1, "second": 0}
+
+
+def test_cache_clear_removes_entries():
+    cache: TTLCache[int] = TTLCache(ttl_seconds=60)
+    cache.set("k", 1)
+    assert cache.get("k") == 1
+    cache.clear()
+    assert cache.get("k") is None
