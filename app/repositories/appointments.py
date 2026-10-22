@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +35,26 @@ class AppointmentRepository:
         except IntegrityError as exc:
             raise self._translate(exc) from exc
         return appointment
+
+    async def sweep_expired(self) -> None:
+        """Expire pending holds whose window has passed.
+
+        The SQL lives here once: two copies previously drifted and left
+        hold_expires_at set on expired rows.
+        """
+        await self.session.execute(
+            update(Appointment)
+            .where(
+                Appointment.status == "pending",
+                Appointment.hold_expires_at < func.now(),
+            )
+            .values(
+                status="expired",
+                cancelled_by="system",
+                hold_expires_at=None,
+                updated_at=func.now(),
+            )
+        )
 
     async def get(self, appointment_id: uuid.UUID) -> Appointment | None:
         return await self.session.get(Appointment, appointment_id)

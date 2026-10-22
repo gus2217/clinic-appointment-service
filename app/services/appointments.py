@@ -1,9 +1,7 @@
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime
 
-from sqlalchemy import func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.appointment import Appointment
@@ -28,11 +26,7 @@ class AppointmentService:
         self.booking = BookingService(session)
 
     async def sweep_expired(self) -> None:
-        await self.session.execute(
-            update(Appointment)
-            .where(Appointment.status == "pending", Appointment.hold_expires_at < func.now())
-            .values(status="expired", cancelled_by="system", hold_expires_at=None, updated_at=func.now())
-        )
+        await self.repo.sweep_expired()
 
     def _event(
         self, appointment: Appointment, event_type: str, actor: str,
@@ -64,10 +58,10 @@ class AppointmentService:
             appointment.cancelled_by = actor
         if target != "pending":
             appointment.hold_expires_at = None
-        appointment.updated_at = datetime.now(ZoneInfo("UTC"))
+        appointment.updated_at = datetime.now(UTC)
         self._event(appointment, event_type, actor, actor_role, from_status, reason)
         await self.repo.save(appointment)
-        await self.session.commit()
+        await self.session.flush()
         return appointment
 
     async def approve(self, appointment_id: uuid.UUID, actor: str, actor_role: str) -> Appointment:
@@ -123,25 +117,25 @@ class AppointmentService:
         doctor = await self.booking.doctors.get(appointment.doctor_id)
         if doctor is None:
             raise NotFound("Doctor not found")
-        now = datetime.now(ZoneInfo("UTC"))
-        start, end = await self.booking._validate(doctor, starts_at, now)
+        now = datetime.now(UTC)
+        start, end = await self.booking.validate(doctor, starts_at, now)
         from_status = appointment.status
         appointment.starts_at = start
         appointment.ends_at = end
-        appointment.updated_at = datetime.now(ZoneInfo("UTC"))
+        appointment.updated_at = datetime.now(UTC)
         self._event(appointment, "rescheduled", "system", "system", from_status)
         try:
             await self.repo.save(appointment)
         except SlotTakenError as exc:
             raise SlotTaken("This slot is already booked") from exc
-        await self.session.commit()
+        await self.session.flush()
         return appointment
 
     async def upcoming_for_patient(
         self, patient_id: uuid.UUID, limit: int, cursor: datetime | None
     ) -> Sequence[Appointment]:
         return await self.repo.upcoming_for_patient(
-            patient_id, datetime.now(ZoneInfo("UTC")), limit, cursor
+            patient_id, datetime.now(UTC), limit, cursor
         )
 
     async def events_for(self, appointment_id: uuid.UUID) -> list[AppointmentEvent]:

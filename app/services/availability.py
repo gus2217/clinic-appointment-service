@@ -1,4 +1,4 @@
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,7 @@ class AvailabilityService:
         day_end = day_start + timedelta(days=1)
         booked = await self.repo.booked_between(doctor.id, day_start, day_end)
         time_off = await self.doctors.time_off(doctor.id, day_start, day_end)
-        now = datetime.now(ZoneInfo("UTC"))
+        now = datetime.now(UTC)
         lead = now + timedelta(minutes=settings.lead_time_minutes)
         result: list[tuple[datetime, datetime]] = []
         for h in hours:
@@ -32,8 +32,8 @@ class AvailabilityService:
             close = datetime.combine(on_date, h.end_time, tzinfo=self.tz)
             while cursor + timedelta(minutes=settings.slot_minutes) <= close:
                 end = cursor + timedelta(minutes=settings.slot_minutes)
-                start_utc = cursor.astimezone(ZoneInfo("UTC"))
-                end_utc = end.astimezone(ZoneInfo("UTC"))
+                start_utc = cursor.astimezone(UTC)
+                end_utc = end.astimezone(UTC)
                 busy = any(start_utc < a.ends_at and a.starts_at < end_utc for a in booked)
                 off = any(start_utc < t.ends_at and t.starts_at < end_utc for t in time_off)
                 if start_utc > now and start_utc >= lead and not busy and not off:

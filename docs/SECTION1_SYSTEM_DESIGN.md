@@ -2,6 +2,11 @@
 
 ## 1.1 The scenario, and the one line that decides the design
 
+The platform is assumed to be a **microservice architecture**. This document covers one
+service: the **booking bounded context**. It owns appointments, their transitions and the
+idempotency records for its own mutating endpoints. Doctors, patients and identity belong to
+other services and are reached through ports; there are no foreign keys across that boundary.
+
 A small clinic with five doctors wants online booking. Each doctor has weekly working
 hours divided into 30-minute slots. A patient sees a doctor's free slots for a date,
 picks one, and books it. The patient can cancel or reschedule.
@@ -28,12 +33,13 @@ The brief invites decisions when requirements are ambiguous. These are mine:
    working hours (`start + 30 min ≤ close`).
 3. **Working hours** are per doctor, per weekday. No holiday calendar in v1; it is a
    documented extension.
-4. **Identity and ownership.** `doctor_id` and `patient_id` are pre-existing
-   identifiers owned by external directory services. This service stores only the ids
-   and reads doctor facts (working hours, time-off, slot size) through a directory
-   port with `fixture` (demo and tests) and `http` adapters. Authentication is not
-   implemented: the gateway supplies identity, and the required endpoints stay
-   callable for evaluation.
+4. **Microservice scope and ownership.** The platform is a set of services; this one
+   is the booking context. `doctor_id` and `patient_id` are pre-existing identifiers
+   owned by external directory services. This service stores only the ids and reads
+   doctor facts (working hours, time-off, slot size) through a directory port with
+   `fixture` (demo and tests) and `http` adapters. There are no foreign keys across
+   that boundary. Authentication is not implemented: the gateway supplies identity, and
+   the required endpoints stay callable for evaluation.
 5. **"Not in the past"** means `starts_at > now`. The bonus tightens it to a
    **60-minute lead time**.
 6. **Lifecycle.** An optional approval flow creates a `pending` hold that expires;
@@ -231,6 +237,25 @@ no "slot" row to keep in sync — the source of truth is the appointments table.
 | DB unavailable | 503 from the health-aware layer; transaction aborts |
 | Clock skew / DST edge | Clinic timezone conversion per date; UTC storage avoids ambiguity |
 
+### Idempotent retries
+
+Every mutating endpoint — `POST /appointments` and the six `PATCH` transitions — accepts an optional `Idempotency-Key`, scoped to
+`(actor, endpoint, key)`.
+
+| Case | Result |
+|---|---|
+| First request | the handler's normal response (`201` on create, `200` on transitions) |
+| Same key, same request | `200 OK` with the stored body and `Idempotent-Replayed: true`; no second write |
+| Same key, different request | `409 IDEMPOTENCY_CONFLICT`; nothing is written |
+| Same key, first request still running | `409 IDEMPOTENCY_IN_PROGRESS`; retry later |
+
+The key row is **claimed and committed before** the handler runs, so a concurrent
+duplicate cannot race into a second booking. The handler's writes and the stored
+response are then committed **in one transaction**: a crash cannot leave an
+appointment without its key row, or a key row without its appointment. A handler
+that raises releases the claim, so a corrected retry can reuse the key. Claims
+older than 60 seconds are treated as abandoned and reclaimed.
+
 ## 1.11 Growth path
 
 - **Variable durations / services:** add `service` and `duration_minutes`; the range
@@ -254,3 +279,22 @@ no "slot" row to keep in sync — the source of truth is the appointments table.
 Notifications, payments, clinical records, recurring appointments, and full auth.
 Each is a large subsystem that would dilute the graded core; each has a documented
 growth path above.
+
+## 1.13 Deployment and operations
+
+One container image, built in two stages: a builder installs the package into
+`/opt/venv`; the runtime copies that venv, runs as an unprivileged user and declares a
+health check against `/health`. The entrypoint runs `alembic upgrade head` before
+starting Uvicorn, so a deploy cannot serve an old schema.
+
+Delivery is a straight line with a proof at the end: protected `main` → pull request →
+`ruff`, `mypy --strict`, `pytest` at an 85% coverage gate → squash merge → the same
+suite on `main` → Render deploy hook → poll `/health` → poll `/version` until the
+reported commit equals the merged SHA. The last step is the one that matters: a 200 from
+an old instance proves nothing about the new code.
+
+Operationally the service is stateless; all state is PostgreSQL. That keeps rollback
+simple — revert the merge, let the pipeline run, and the entrypoint migrates forward.
+The one piece of process-local state is the directory cache, which is rebuilt on boot and
+is safe to lose. Timeouts are enforced in the database session (`statement_timeout`,
+`lock_timeout`) rather than only in the client, so a slow query cannot pin a worker.

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 STATUSES = ("pending", "booked", "cancelled", "completed", "no_show", "rejected", "expired")
+_STATUS_SQL = "status IN (" + ",".join("'" + s + "'" for s in STATUSES) + ")"
 
 class Appointment(Base):
     __tablename__ = "appointment"
@@ -24,7 +25,7 @@ class Appointment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     __table_args__ = (
-        CheckConstraint("status IN ('pending','booked','cancelled','completed','no_show','rejected','expired')", name="ck_status"),
+        CheckConstraint(_STATUS_SQL, name="ck_status"),
         CheckConstraint("ends_at = starts_at + interval '30 minutes'", name="ck_duration"),
         CheckConstraint("(status = 'cancelled') = (cancel_reason IS NOT NULL)", name="ck_cancel_consistent"),
         CheckConstraint("(status = 'pending') = (hold_expires_at IS NOT NULL)", name="ck_hold"),

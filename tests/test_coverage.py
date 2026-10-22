@@ -7,6 +7,7 @@ from sqlalchemy import text
 from starlette.requests import Request
 
 from app.db.session import SessionFactory
+from app.repositories.idempotency import IdempotencyRepository
 from tests.conftest import future_slot
 
 pytestmark = pytest.mark.asyncio
@@ -30,13 +31,14 @@ async def test_idempotent_replay_and_conflict(client, seeded):
     first = await client.post("/appointments", json=payload, headers=headers)
     assert first.status_code == 201, first.text
     replay = await client.post("/appointments", json=payload, headers=headers)
-    assert replay.status_code == 201
-    assert replay.json()["id"] == first.json()["id"]
+    assert replay.status_code == 200
+    assert replay.headers["Idempotent-Replayed"] == "true"
+    assert replay.json() == first.json()
 
     changed = dict(payload)
     changed["starts_at"] = future_slot(40, 11).isoformat()
     conflict = await client.post("/appointments", json=changed, headers=headers)
-    assert conflict.status_code == 400
+    assert conflict.status_code == 409
     assert conflict.json()["code"] == "IDEMPOTENCY_CONFLICT"
 
 async def test_get_and_events_success(client, seeded):
@@ -185,15 +187,19 @@ async def test_sweep_expires_stale_holds(client, seeded):
         ), {"i": stale_id})).scalar()
     assert status == "expired"
 
-async def test_idempotency_store_race_returns_existing(client, seeded):
-    from app.repositories.idempotency import IdempotencyRepository
+async def test_claim_conflict_is_rejected_for_a_second_writer():
+    from sqlalchemy.exc import IntegrityError
 
     key = f"race-{uuid.uuid4()}"
     async with SessionFactory() as first:
-        await IdempotencyRepository(first).store("actor-1", key, "hash-first", 201, {"id": "first"})
+        await IdempotencyRepository(first).claim(
+            "actor-1", "POST /appointments", key, "hash-first"
+        )
         await first.commit()
 
     async with SessionFactory() as second:
-        row = await IdempotencyRepository(second).store("actor-1", key, "hash-second", 201, {"id": "second"})
-        assert row.request_hash == "hash-first"
-        assert row.response_body == {"id": "first"}
+        with pytest.raises(IntegrityError):
+            await IdempotencyRepository(second).claim(
+                "actor-1", "POST /appointments", key, "hash-second"
+            )
+        await second.rollback()

@@ -93,5 +93,6 @@ async def test_idempotency(client, seeded):
     r1 = await client.post("/appointments", json=body, headers=headers)
     r2 = await client.post("/appointments", json=body, headers=headers)
     assert r1.status_code == 201
-    assert r2.status_code == 201
-    assert r1.json()["id"] == r2.json()["id"]
+    assert r2.status_code == 200
+    assert r2.headers["Idempotent-Replayed"] == "true"
+    assert r1.json() == r2.json()
