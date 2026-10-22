@@ -14,7 +14,6 @@ dependencies = [
   "psycopg[binary]==3.2.3",
   "pydantic==2.10.4",
   "pydantic-settings==2.7.0",
-  "python-dateutil==2.9.0.post0",
   "pytest==8.3.4",
   "pytest-asyncio==0.25.0",
   "pytest-cov==6.0.0",
@@ -48,9 +47,14 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
 # FastAPI dependency injection requires Depends() in default arguments.
 [tool.ruff.lint.per-file-ignores]
 "app/api/routes/*.py" = ["B008"]
+# The local alembic/ directory shadows the package name for import sorting.
+"alembic/env.py" = ["I001"]
 
 [tool.mypy]
 strict = true

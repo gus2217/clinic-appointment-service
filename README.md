@@ -8,6 +8,14 @@ Informatics backend assessment.
 Alembic · Pydantic v2
 **IDs:** GUID (UUID) primary keys throughout
 **Deploy branch:** `main`
+**How it was built:** spec-first, with agents doing the scaffolding; the full account is in [`AI_REFLECTION.md`](AI_REFLECTION.md).
+
+**Scope.** This is the booking service of a clinic platform, built as a microservice: it owns
+appointments and their state transitions, and nothing else. Doctors and patients are owned by
+separate directory services and reached through a port (`fixture` for the demo and tests,
+`http` in production). There are no foreign keys across that boundary, and no user table here —
+the gateway authenticates and injects `X-Actor-Id` / `X-Actor-Role`.
+
 
 ---
 
@@ -47,7 +55,7 @@ seeding is required. `CLINIC_DIRECTORY_MODE=http` switches to the external servi
 
 1. `GET /doctors/{id}/availability?date=YYYY-MM-DD` on a future weekday → free slots.
 2. `POST /appointments` with a doctor, a patient, and one slot → 201.
-3. Send the same body again → 409 `SLOT_TAKEN`.
+3. Send the same body again without an `Idempotency-Key` → 409 `SLOT_TAKEN`.
 4. `PATCH /appointments/{id}/cancel` with a reason → 200.
 5. Re-book the freed slot → 201.
 6. `PATCH /appointments/{id}/reschedule` → 200, and the old slot frees up.
@@ -68,8 +76,7 @@ seeding is required. `CLINIC_DIRECTORY_MODE=http` switches to the external servi
   callable by the evaluator; turning it on yields 401 without headers.
 - **Cancellation.** Terminal and requires a reason; cancelling twice is 409.
 - **Reschedule.** Moves the existing appointment in place, atomically; only from active.
-- **Idempotency.** `Idempotency-Key` on booking, scoped by actor, with a unique
-  constraint and a stored response.
+- **Idempotency.** `Idempotency-Key` on every mutating endpoint, scoped to `(actor, endpoint, key)`: the first call stores its response, a replay returns 200 with that body, and a reused key with a different request is a 409. The key row and the write commit in one transaction.
 
 ---
 
@@ -243,7 +250,7 @@ curl -s "$BASE/patients/$PATIENT/appointments?limit=20"
 | 200 | GET /appointments/{id}, /events, /patients/{id}/appointments |
 | 404 NOT_FOUND | unknown doctor, patient, or appointment |
 
-Idempotency: send the header Idempotency-Key: <unique-string> twice with the same body; the second call returns the same appointment. Reuse the key with a different body and the API returns 400 IDEMPOTENCY_CONFLICT.
+Idempotency: all mutating endpoints accept Idempotency-Key. Send the same key and body twice: the first call is 201 Created (or 200 for a transition), the replay is 200 OK with the identical body and Idempotent-Replayed: true, and nothing is written twice. Reusing the key with a different request returns 409 IDEMPOTENCY_CONFLICT; retrying while the first request is still running returns 409 IDEMPOTENCY_IN_PROGRESS.
 
 ---
 
@@ -283,7 +290,7 @@ upstream fetch per worker per TTL or introduce a shared cache.
 
 - API tests: every endpoint and every error code.
 - Timezone: local/UTC equivalence and offset handling.
-- Idempotency: replay returns the same appointment.
+- Idempotency: replay returns 200 with the same appointment; a reused key with a different body returns 409.
 - Concurrency: ten parallel bookings, one winner.
 - Directory boundary: cache hit and expiry, write-path cache bypass, upstream 5xx and
   timeout mapping to `503 + Retry-After`, and the `/version` marker.
@@ -327,33 +334,53 @@ in CI so a red pipeline blocks a merge.
 
 **Public URL:** https://clinic-appointment-service.onrender.com
 
-**Deploy branch:** `main`. A merge into `main` is the only thing that triggers a
-deployment.
+The path from a commit to a live service is deliberately boring, and every step is
+visible:
 
-- **Image:** multi-stage Docker build. The builder installs the package into
-  `/opt/venv`; the runtime image copies that venv, runs as an unprivileged user, and
-  health-checks `/health`. The entrypoint runs `alembic upgrade head` and then serves
-  Uvicorn on `$PORT`, so a deploy can never serve an old schema.
-- **Pipeline:** GitHub Actions runs `ruff`, `mypy` (strict) and `pytest` with the 85%
-  coverage gate on every pull request. On a merge to `main` the suite runs again; only
-  if it is green does the workflow POST the Render deploy hook, poll `/health` until it
-  returns 200, and then poll `/version` until the reported commit matches the pushed
-  SHA — a green deploy proves the new instance is live, not just that something answered.
-- **Platform auto-deploy is disabled**, so a deployment only ever follows a green
-  pipeline.
-- **Database:** Neon PostgreSQL, reached over TLS (`sslmode=require`) through
-  `CLINIC_DATABASE_URL`.
-- **Auth is open by default** (`CLINIC_AUTH_REQUIRED=false`) so every endpoint is
-  directly callable for evaluation. When deployed behind a gateway, the
-  `X-Actor-Id` / `X-Actor-Role` headers it injects are honoured.
+1. **Branch.** Work happens on a branch; `main` is protected, so there are no direct
+   pushes.
+2. **Pull request.** Opening one runs the `test` job: `ruff`, `mypy` (strict), and
+   `pytest` with the 85% coverage gate.
+3. **Review.** The diff is read before merge. A green pipeline is necessary, not
+   sufficient.
+4. **Merge.** Squash merge into `main`. That merge is the only thing that can deploy.
+5. **Pipeline.** The suite runs again on `main`; only if it is green does the workflow
+   POST the Render deploy hook.
+6. **Build and migrate.** Render builds the multi-stage image. The entrypoint runs
+   `alembic upgrade head` and then serves Uvicorn on `$PORT`, so a deploy can never
+   serve an old schema.
+7. **Smoke check.** The workflow polls `/health` until it returns 200.
+8. **Prove the new code is live.** It then polls `/version` until the reported commit
+   matches the pushed SHA. "Healthy" is not the same as "the new instance".
+
+If step 8 fails, the deploy is treated as failed even when the old instance still
+answers.
+
+| Variable | Where it is set | Why |
+|---|---|---|
+| `CLINIC_DATABASE_URL` | Render dashboard, `sync: false` | Neon connection string; never committed |
+| `CLINIC_AUTH_REQUIRED` | `render.yaml` | `false` keeps every endpoint callable for evaluation |
+| `CLINIC_DIRECTORY_MODE` | Render dashboard | `fixture` for the demo, `http` when the directory services exist |
+| `CLINIC_DOCTORS_URL`, `CLINIC_PATIENTS_URL` | Render dashboard | Required only in `http` mode |
+| `PORT` | Render | Uvicorn binds it; the entrypoint passes it through |
+
+Platform auto-deploy is disabled, so a deployment only ever follows a green pipeline.
+**Rollback** is a revert commit on `main`: the same pipeline runs, the entrypoint
+migrates forward, and `/version` proves which build is serving.
+
+**Auth is open by default** (`CLINIC_AUTH_REQUIRED=false`) so every endpoint is directly
+callable for evaluation. Behind a gateway, the `X-Actor-Id` / `X-Actor-Role` headers it
+injects are honoured; this service still does not authenticate anyone.
 
 ## Trade-offs
 
 - **Database constraint over application locking** — correctness is declarative and covers
   every writer, including manual SQL.
 - **Computed availability instead of materialised slots** — no stale rows, no nightly job.
-- **Six tables** — a working, tested, deployed core beats a half-built larger surface.
-- **In-place reschedule** — atomicity is free; no per-appointment event history.
+- **Three tables** — appointments, their events and idempotency keys. Doctors and
+  patients stay with the services that own them.
+- **In-place reschedule** — atomicity is free; the appointment keeps its id and the
+  change is recorded as an event.
 - **Auth optional by default** — keeps the required endpoints callable for evaluation.
 
 ---
@@ -436,10 +463,11 @@ than offer a slot it cannot verify.
 
 ## AI reflection
 
-See `AI_REFLECTION.md`. In short: AI was used for scaffolding, edge-case test ideas, and
-pressure-testing the concurrency design. It was not used for the schema, the constraint
-choice, or the decision to enforce overlap in the database. Several suggestions were
-rejected because they moved correctness into application code.
+I built this spec-first. The schema, the constraint and the lifecycle were decided
+before any code was generated, and the agents worked inside those boundaries. The full
+account — what I used AI for in each section, a suggestion that changed the work, a case
+where it was wrong and how I caught it, and the two calls I made without it — is in
+[`AI_REFLECTION.md`](AI_REFLECTION.md).
 
 ---
 

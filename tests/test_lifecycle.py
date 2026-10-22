@@ -91,7 +91,7 @@ async def test_idempotency_conflict(client, seeded):
         "starts_at": future_slot(12, 11).isoformat(),
     }
     second = await client.post("/appointments", json=body, headers=headers)
-    assert second.status_code == 400
+    assert second.status_code == 409
     assert second.json()["code"] == "IDEMPOTENCY_CONFLICT"
 
 async def test_availability_returns_doctor_timezone(client, seeded):
