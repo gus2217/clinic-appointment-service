@@ -7,9 +7,8 @@ import pytest
 from app.directories import fixtures
 from app.directories.contracts import DoctorView, PatientView, WorkingHours
 from app.directories.doctors import HttpDoctorDirectory, build_doctor_directory
-from app.directories.patients import HttpPatientDirectory
-
-pytestmark = pytest.mark.asyncio
+from app.directories.errors import DirectoryUnavailable
+from app.directories.patients import HttpPatientDirectory, build_patient_directory
 
 
 async def test_http_doctor_directory_follows_contract():
@@ -119,3 +118,53 @@ def test_http_mode_without_url_fails_fast(monkeypatch):
     monkeypatch.setattr(module.settings, "doctors_url", "")
     with pytest.raises(RuntimeError):
         module.build_doctor_directory()
+
+
+async def test_http_patient_directory_404_returns_none():
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(404)),
+        base_url="http://dir",
+    )
+    assert await HttpPatientDirectory("http://dir", client=client).get(uuid.uuid4()) is None
+    await client.aclose()
+
+
+async def test_http_patient_directory_5xx_raises():
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+        base_url="http://dir",
+    )
+    with pytest.raises(DirectoryUnavailable):
+        await HttpPatientDirectory("http://dir", client=client).get(uuid.uuid4())
+    await client.aclose()
+
+
+async def test_http_patient_directory_timeout_raises():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://dir")
+    with pytest.raises(DirectoryUnavailable):
+        await HttpPatientDirectory("http://dir", client=client).get(uuid.uuid4())
+    await client.aclose()
+
+
+async def test_http_patient_directory_invalid_payload_raises():
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"id": str(uuid.uuid4())})
+        ),
+        base_url="http://dir",
+    )
+    with pytest.raises(DirectoryUnavailable):
+        await HttpPatientDirectory("http://dir", client=client).get(uuid.uuid4())
+    await client.aclose()
+
+
+def test_patient_http_mode_without_url_fails_fast(monkeypatch):
+    from app.directories import patients as module
+
+    monkeypatch.setattr(module.settings, "directory_mode", "http")
+    monkeypatch.setattr(module.settings, "patients_url", "")
+    with pytest.raises(RuntimeError):
+        build_patient_directory()

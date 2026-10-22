@@ -1,9 +1,12 @@
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
+from fastapi import Response
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.idempotency import IdempotencyGuard
 from app.db.session import SessionFactory
@@ -128,3 +131,46 @@ async def test_work_and_key_commit_together(client, seeded, monkeypatch):
             .where(IdempotencyKey.actor_id == "actor-atomic")
         )
     assert leftover == 0
+
+
+async def test_guard_replays_when_claim_race_loses(monkeypatch):
+    body = {"id": str(uuid.uuid4())}
+    calls = {"n": 0}
+
+    async def fake_claim(self, actor_id, endpoint, key, request_hash):
+        raise IntegrityError("INSERT", {}, Exception("duplicate key"))
+
+    async def fake_find(self, actor_id, endpoint, key):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return SimpleNamespace(
+            request_hash="same-hash", state="completed", response_body=body
+        )
+
+    monkeypatch.setattr(IdempotencyRepository, "claim", fake_claim)
+    monkeypatch.setattr(IdempotencyRepository, "find", fake_find)
+
+    async with SessionFactory() as session:
+        guard = IdempotencyGuard(
+            session, Response(), "actor", "ENDPOINT", "key", "same-hash"
+        )
+        async with guard:
+            assert guard.replayed == body
+
+
+async def test_guard_reraises_when_conflicting_row_disappears(monkeypatch):
+    async def fake_claim(self, actor_id, endpoint, key, request_hash):
+        raise IntegrityError("INSERT", {}, Exception("duplicate key"))
+
+    async def fake_find(self, actor_id, endpoint, key):
+        return None
+
+    monkeypatch.setattr(IdempotencyRepository, "claim", fake_claim)
+    monkeypatch.setattr(IdempotencyRepository, "find", fake_find)
+
+    async with SessionFactory() as session:
+        guard = IdempotencyGuard(session, Response(), "actor", "ENDPOINT", "key", "hash")
+        with pytest.raises(IntegrityError):
+            async with guard:
+                pass
