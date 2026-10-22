@@ -2,7 +2,7 @@
 
 A booking service for a clinic with five doctors and 30-minute slots. Patients see which slots are free, book one, and can cancel or reschedule. **A booked slot is never available to anyone else.** This is my submission for the Savannah Informatics backend assessment.
 
-**Reviewer summary:** I treat this as the booking microservice of a larger clinic platform. It owns appointments and their state transitions, and nothing else. Doctors and patients live in other services, reached through a port. The core guarantee (no double booking) is enforced by **GiST exclusion constraints** in PostgreSQL, not by application checks. Start at [/docs](https://clinic-appointment-service.onrender.com/docs).
+**Reviewer summary:** I treat this as the booking microservice of a larger clinic platform. It owns appointments and their state transitions, and nothing else. Doctors and patients live in other services, reached through a port. The core guarantee (no double booking) is enforced by **GiST exclusion constraints** in PostgreSQL, not by application checks. Start at [/docs](https://github.com/gus2217/clinic-appointment-service/blob/main/docs/SECTION1_SYSTEM_DESIGN.md).
 
 **Stack:** Python 3.12, FastAPI (async), SQLAlchemy 2 (async), psycopg 3, Alembic, Pydantic v2, PostgreSQL 16, Docker, GitHub Actions, Render, Neon.
 
@@ -130,25 +130,25 @@ Three tables, all with UUID primary keys. Doctors and patients are external, so
 `appointment` stores only their ids. Migration 0005 dropped the doctor and patient
 tables.
 
-| Table                | Columns (exactly as in the model) |
-| -------------------- | --------------------------------- |
-| `appointment`        | `id`, `doctor_id`, `patient_id`, `starts_at`, `ends_at`, `duration_minutes`, `status`, `cancel_reason`, `cancelled_by`, `hold_expires_at`, `created_at`, `updated_at` |
+| Table                | Columns (exactly as in the model)                                                                                                                                          |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `appointment`        | `id`, `doctor_id`, `patient_id`, `starts_at`, `ends_at`, `duration_minutes`, `status`, `cancel_reason`, `cancelled_by`, `hold_expires_at`, `created_at`, `updated_at`      |
 | `appointment_events` | `id`, `appointment_id` (FK → `appointment.id`, `ON DELETE CASCADE`), `event_type`, `actor_id`, `actor_role`, `from_status`, `to_status`, `reason`, `payload`, `created_at` |
-| `idempotency_keys`   | `id`, `actor_id`, `endpoint`, `key`, `request_hash`, `state`, `status_code`, `response_body`, `created_at` |
+| `idempotency_keys`   | `id`, `actor_id`, `endpoint`, `key`, `request_hash`, `state`, `status_code`, `response_body`, `created_at`                                                                 |
 
 `state` is `in_progress` while a request is running and `completed` once its
 response is stored; the response columns are null until then.
 
 **Constraints on `appointment`:**
 
-| Constraint              | Meaning |
-| ----------------------- | ------- |
+| Constraint              | Meaning                                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------- |
 | `ck_status`             | `status` is one of `pending`, `booked`, `cancelled`, `completed`, `no_show`, `rejected`, `expired` |
-| `ck_duration`           | `ends_at = starts_at + interval '30 minutes'` |
-| `ck_cancel_consistent`  | `status = 'cancelled'` ⇔ `cancel_reason IS NOT NULL` |
-| `ck_hold`               | `status = 'pending'` ⇔ `hold_expires_at IS NOT NULL` |
-| `ex_doctor_no_overlap`  | `EXCLUDE USING gist (doctor_id WITH =, tstzrange(starts_at, ends_at) WITH &&)` on active rows |
-| `ex_patient_no_overlap` | the same exclusion on `patient_id` |
+| `ck_duration`           | `ends_at = starts_at + interval '30 minutes'`                                                      |
+| `ck_cancel_consistent`  | `status = 'cancelled'` ⇔ `cancel_reason IS NOT NULL`                                               |
+| `ck_hold`               | `status = 'pending'` ⇔ `hold_expires_at IS NOT NULL`                                               |
+| `ex_doctor_no_overlap`  | `EXCLUDE USING gist (doctor_id WITH =, tstzrange(starts_at, ends_at) WITH &&)` on active rows      |
+| `ex_patient_no_overlap` | the same exclusion on `patient_id`                                                                 |
 
 **Indexes:** `ix_appt_doctor_day (doctor_id, starts_at)` and
 `ix_appt_patient (patient_id, starts_at)`, both partial on
@@ -501,15 +501,15 @@ Coverage is measured over `app/`, excluding tests. The gate is enforced in CI so
 | Step                          | What happens                                                                                                                                            |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1. Branch                     | Work happens on a branch; `main` is protected, so there are no direct pushes                                                                            |
-| 2. Pull request               | Runs the `test` job: `ruff`, `mypy` (strict), `pytest` with the 85% coverage gate                                                                       |
+| 2. Pull request               | Runs the `test` job: `ruff`, `mypy` (strict), `pytest` with the 85% coverage gate, `alembic check` for model/migration drift, and a Docker build |
 | 3. Review                     | The diff is read before merge. A green pipeline is necessary, not sufficient                                                                            |
 | 4. Merge                      | Squash merge into `main`. That merge is the only thing that can deploy                                                                                  |
 | 5. Pipeline                   | The suite runs again on `main`; only if green does the workflow POST the Render deploy hook                                                             |
-| 6. Build and migrate          | Render builds the multi-stage image. The entrypoint runs `alembic upgrade head`, then serves Uvicorn on `$PORT`, so a deploy never serves an old schema |
-| 7. Smoke check                | The workflow polls `/health` until it returns 200                                                                                                       |
-| 8. Prove the new code is live | It polls `/version` until the reported commit matches the pushed SHA. "Healthy" is not the same as "the new instance"                                   |
+| 6. Build and migrate          | Render builds the multi-stage image. The entrypoint takes a PostgreSQL advisory lock, runs `alembic upgrade head` with bounded retries, then serves Uvicorn on `$PORT` |
+| 7. Smoke check                | The workflow polls `/health` until it returns 200, for up to ten minutes |
+| 8. Prove the new code is live | It polls `/version` until the reported commit matches the pushed SHA, also for up to ten minutes |
 
-If step 8 fails, the deploy is treated as failed even when the old instance still answers.
+If step 8 fails, the deploy is treated as failed even when the old instance still answers. The deploy job also fails when `RENDER_DEPLOY_HOOK_URL` or `DEPLOY_BASE_URL` is missing, instead of reporting a deploy that never happened. The runtime image carries runtime dependencies only; test and lint tools are installed in CI from the `dev` extra and never shipped.
 
 | Variable                                    | Where it is set                 | Why                                                              |
 | ------------------------------------------- | ------------------------------- | ---------------------------------------------------------------- |
