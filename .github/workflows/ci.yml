@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 # One run per ref: a newer push supersedes an in-flight run instead of racing it.
 concurrency:
@@ -54,7 +55,9 @@ jobs:
         run: docker build -t clinic-api:ci .
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -89,6 +92,10 @@ jobs:
           echo "health check failed"
           exit 1
 
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Verify deployed commit
         env:
           BASE_URL: ${{ secrets.DEPLOY_BASE_URL }}
@@ -98,15 +105,17 @@ jobs:
           for attempt in $(seq 1 60); do
             commit=$(curl -fsS --max-time 10 "$BASE_URL/version" | python -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
             if [ -n "$commit" ] && [ "$commit" != "unknown" ]; then
-              case "$GITHUB_SHA" in
-                "$commit"*)
-                  echo "deployed commit $commit matches $GITHUB_SHA"
-                  exit 0
-                  ;;
-              esac
+              if [ "$commit" = "$GITHUB_SHA" ]; then
+                echo "deployed commit $commit matches $GITHUB_SHA"
+                exit 0
+              fi
+              if git cat-file -e "$commit^{commit}" 2>/dev/null && git merge-base --is-ancestor "$GITHUB_SHA" "$commit"; then
+                echo "deployed commit $commit contains $GITHUB_SHA"
+                exit 0
+              fi
             fi
-            echo "deployed commit '$commit' does not match $GITHUB_SHA (attempt $attempt/60)"
+            echo "deployed commit '$commit' does not contain $GITHUB_SHA (attempt $attempt/60)"
             sleep 10
           done
-          echo "deployment did not report commit $GITHUB_SHA"
+          echo "deployment did not report a commit containing $GITHUB_SHA"
           exit 1
